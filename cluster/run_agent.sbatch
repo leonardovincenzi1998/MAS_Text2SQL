@@ -16,8 +16,23 @@ export PIP_CACHE_DIR=/scratch.hpc/leonardo.vincenzi/.cache/pip # Devia la cache 
 export TMPDIR=/scratch.hpc/leonardo.vincenzi/tmp # Devia i file temporanei
 mkdir -p $TMPDIR
 
+export XDG_CACHE_HOME=/scratch.hpc/leonardo.vincenzi/.cache
+export TORCH_HOME=/scratch.hpc/leonardo.vincenzi/.cache/torch
+export TRITON_CACHE_DIR=/scratch.hpc/leonardo.vincenzi/.cache/triton
+mkdir -p $XDG_CACHE_HOME
+
+
 # 2. Attiva Venv
 source /scratch.hpc/leonardo.vincenzi/venv/bin/activate
+
+# ==========================================
+# BLOCCO INSTALLAZIONE (DA RIMUOVERE DOPO IL PRIMO SUCCESSO)
+# ==========================================
+#echo "🛠️ Installazione vLLM in corso sul nodo di calcolo..."
+# Usiamo --no-cache-dir per evitare di riempire lo spazio temporaneo
+#pip install vllm --no-cache-dir
+#echo "✅ Installazione completata."
+# ==========================================
 
 echo "⬇️ Controllo e download modello Qwen..."
 
@@ -46,7 +61,6 @@ timeout 300 bash -c 'until curl -s localhost:8000/v1/models > /dev/null; do slee
 # 5. Esecuzione Agente
 echo "✅ Server pronto! Avvio agente..."
 # Modifica qui la domanda tra virgolette per testare query diverse
-python3 main.py "Quanti terreni ci sono?"
-
+python3 main.py "Quanti terreni ci sono?" --db "/scratch.hpc/leonardo.vincenzi//Terreni_Fabbricati.db"
 # 6. Pulizia
 kill $SERVER_PID

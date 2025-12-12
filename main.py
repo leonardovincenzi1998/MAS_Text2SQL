@@ -75,7 +75,7 @@ from src.graph import app
 
 # Configura qui il percorso assoluto o relativo del file SQLite
 # Esempio: "/mnt/data/cluster_inventory_v2.sqlite"
-REAL_DB_PATH = "C:\\Users\\lvincenzi\\Tesi\\Cluster unibo\\Terreni_Fabbricati.db" 
+REAL_DB_PATH = "Terreni_Fabbricati.db" 
 
 async def main():
     # --- CONFIGURAZIONE ARGOMENTI ---
