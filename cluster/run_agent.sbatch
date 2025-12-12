@@ -21,6 +21,8 @@ export TORCH_HOME=/scratch.hpc/leonardo.vincenzi/.cache/torch
 export TRITON_CACHE_DIR=/scratch.hpc/leonardo.vincenzi/.cache/triton
 mkdir -p $XDG_CACHE_HOME
 
+# Fix specifico per l'errore "CUDA out of memory" (frammentazione)
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # 2. Attiva Venv
 source /scratch.hpc/leonardo.vincenzi/venv/bin/activate
@@ -49,6 +51,8 @@ python3 -m vllm.entrypoints.openai.api_server \
     --dtype auto \
     --api-key EMPTY \
     --port 8000 \
+    --distributed-executor-backend mp \
+    --gpu-memory-utilization 0.8 \
     --max-model-len 8192 &
 
 SERVER_PID=$!
@@ -61,6 +65,6 @@ timeout 300 bash -c 'until curl -s localhost:8000/v1/models > /dev/null; do slee
 # 5. Esecuzione Agente
 echo "✅ Server pronto! Avvio agente..."
 # Modifica qui la domanda tra virgolette per testare query diverse
-python3 main.py "Quanti terreni ci sono?" --db "/scratch.hpc/leonardo.vincenzi//Terreni_Fabbricati.db"
+python3 main.py "Quanti terreni ci sono?" --db "/scratch.hpc/leonardo.vincenzi/Terreni_Fabbricati.db"
 # 6. Pulizia
 kill $SERVER_PID
