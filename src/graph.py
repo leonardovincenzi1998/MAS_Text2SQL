@@ -6,7 +6,6 @@ from langgraph.graph.message import add_messages
 from .agent import schema_agent
 from .models import SchemaDeps, TableSelectionResult
 from .database import DatabaseManager
-
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     user_query: str
@@ -67,42 +66,56 @@ async def schema_extraction_node(state: AgentState):
         
         #CASO 2: Il modello ha restituito una stringa (JSON sporco o Markdown)
         elif isinstance(raw_output, str):
-            print(f"⚠️ Rilevata stringa grezza. Tentativo di pulizia e parsing...")
+            print(f"⚠️ Rilevata stringa grezza. Tentativo di estrazione JSON avanzata...")
             
-            try:
-                #1. Rimuoviamo i backticks del markdown (```json ... ```)
-                clean_json = raw_output.replace("```json", "").replace("```", "").strip()
+            # 1. Pulizia Markdown di base
+            clean_text = raw_output.replace("```json", "").replace("```", "").strip()
+            
+            # 2. ESTARZIONE CON REGEX (La parte nuova robusta)
+            # Cerca tutto ciò che è compreso tra la prima '{' e l'ultima '}'
+            # re.DOTALL permette al punto '.' di matchare anche le "a capo"
+            match = re.search(r'\{.*\}', clean_text, re.DOTALL)
+            
+            if match:
+                json_str = match.group(0)
+                try:
+                    # Parsing del JSON estratto
+                    data_dict = json.loads(json_str)
+                    
+                    # Validazione tramite Pydantic
+                    validated_obj = TableSelectionResult.model_validate(data_dict)
+                    
+                    print("✅ JSON estratto e validato con successo!")
+                    return {
+                        "selected_tables": validated_obj.relevant_tables,
+                        "messages": [f"Ragionamento (Recuperato): {validated_obj.reasoning}"]
+                    }
                 
-                #2. Parsiamo la stringa in un dizionario Python
-                data_dict = json.loads(clean_json)
-                
-                #3. Validiamo il dizionario usando il nostro Modello Pydantic
-                validated_obj = TableSelectionResult.model_validate(data_dict)
-                
-                print("✅ Parsing manuale riuscito!")
-                return {
-                    "selected_tables": validated_obj.relevant_tables,
-                    "messages": [f"Ragionamento (Recuperato): {validated_obj.reasoning}"]
-                }
-                
-            except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                    return {
+                        "selected_tables": [],
+                        "error": f"JSON estratto ma non valido (Errore sintassi): {e}",
+                        "messages": [f"Stringa problematica: {json_str}"]
+                    }
+                except Exception as e:
+                    return {
+                         "selected_tables": [],
+                         "error": f"JSON valido ma schema errato (Mancano campi?): {e}",
+                         "messages": [f"Dati: {json_str}"]
+                    }
+            else:
+                # Nessuna parentesi graffa trovata
                 return {
                     "selected_tables": [],
-                    "error": "Il modello ha restituito testo non strutturato impossibile da leggere come JSON.",
-                    "messages": [f"Raw output fallito: {raw_output}"]
-                }
-            except Exception as e:
-                return {
-                     "selected_tables": [],
-                     "error": f"Il JSON era valido ma non rispettava lo schema: {e}",
-                     "messages": [f"Raw output: {raw_output}"]
+                    "error": "Il modello non ha restituito nessun oggetto JSON {} valido nel testo.",
+                    "messages": [f"Raw output: {raw_output}"]
                 }
 
         else:
-            return {"error": f"Tipo imprevisto: {type(raw_output)}"}
+            return {"error": f"Tipo di output imprevisto: {type(raw_output)}"}
 
     except Exception as e:
-        return {"error": f"Errore critico: {str(e)}"}
+        return {"error": f"Errore critico nel nodo Agente: {str(e)}"}
 
 workflow = StateGraph(AgentState)
 workflow.add_node("extract_schema", schema_extraction_node)
