@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --partition=l40       # Specifica la coda con le GPU da 48GB (OBBLIGATORIA per 32B)
 #SBATCH --gres=gpu:1          # Richiede 1 GPU
-#SBATCH --mem=64G             # Richiede RAM di sistema adeguata
+#SBATCH --mem=58G             # Richiede RAM di sistema adeguata
 #SBATCH --output=agent_log_%j.txt
 #SBATCH --chdir=/scratch.hpc/leonardo.vincenzi/mas_text2sql
 
@@ -18,6 +18,11 @@ mkdir -p $TMPDIR
 
 # 2. Attiva Venv
 source /scratch.hpc/leonardo.vincenzi/venv/bin/activate
+
+echo "⬇️ Controllo e download modello Qwen..."
+
+# Senza token, perché Qwen è pubblico
+huggingface-cli download Qwen/Qwen2.5-32B-Instruct-AWQ
 
 # 3. Avvio vLLM (Server)
 # NOTA: Qwen 32B AWQ richiede circa 18-20GB di VRAM. 

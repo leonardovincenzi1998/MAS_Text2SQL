@@ -1,0 +1,52 @@
+#Per collegarsi - TERMINALE PC AZIENDALE
+ssh leonardo.vincenzi@giano.cs.unibo.it
+
+#Una volta loggato su Giano:
+#Bash
+cd /scratch.hpc/
+mkdir leonardo.vincenzi 
+cd leonardo.vincenzi
+
+# Assicurarsi di essere in /scratch.hpc/leonardo.vincenzi
+python3 -m venv venv
+source venv/bin/activate
+
+# Installare PyTorch con supporto CUDA 11.8
+pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Verifica presenza git
+git --version
+
+# Caricare il codice
+git clone https://github.com/tuo-username/tuo-progetto.git
+#per caricare SOLO il database - TERMINALE PC AZIENDALE
+scp /percorso/locale/nomefileSQLite.db nome.cognome@giano.cs.unibo.it:/scratch.hpc/nome.cognome/progetto/
+#per caricare singolo file - TERMINALE PC AZIENDALE
+scp C:\Users\lvincenzi\Tesi\mas_text2sql\cluster\run_agent.sbatch leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/
+OPPURE
+#caricare con scp l'intera cartella del progetto - TERMINALE PC AZIENDALE
+scp -r /percorso/locale/progetto nome.cognome@giano.cs.unibo.it:/scratch.hpc/nome.cognome/
+
+
+# Poi installare il resto dal file, presente su github
+pip install --no-cache-dir -r requirements_cluster.txt #RICORDATI DI TOGLIERE TORCH qualora ci sia
+
+#Login su HuggingFace:
+export HF_HOME=/scratch.hpc/leonardo.vincenzi/hf_cache
+huggingface-cli login # (Se serve)
+huggingface-cli download Qwen/Qwen2.5-32B-Instruct-AWQ
+
+#Necessario per file importati da windows su linux
+sed -i 's/\r$//' run_agent.sbatch
+
+#Da Giano, lancia il job:
+sbatch run_agent.sbatch
+
+# Controlla lo stato del job (PENDING, RUNNING, etc.)
+squeue -u leonardo.vincenzi
+
+# Leggi l'output in tempo reale (sostituisci il numero del job)
+tail -f agent_log_12345.txt
+
+#Il sistema metterà il job in coda. Quando parte, l'output finirà nel file
+agent_output_12345.log
