@@ -1,0 +1,30 @@
+#INSTALLAZIONE E SETTING ENVIRONMENT LOCALE
+
+#1)INSTALLARE "OLLAMA" - FILE OLLAMASETUPP.EXE SU DOWNLOAD
+#2)LANCIARE COMANDO pip install
+
+# Framework Agenti e AI
+langgraph
+langchain
+langchain-community
+langchain-ollama  # Specifico per usare Ollama
+
+# Gestione Dati e Strutture
+pydantic-ai
+pandas
+
+# Database e SQL
+sqlalchemy
+sqlglot           # Per la validazione SQL
+
+# Utility
+python-dotenv     # Per gestire variabili d'ambiente (.env)
+huggingface_hub   # Utile per scaricare dataset o altro
+jupyter           # In caso di utilizzo di notebook per testare
+
+
+
+
+	#COMANDO: py -m pip install -r requirements_local.txt
+			# Nota: PyTorch locale si installerà come dipendenza o puoi fare 'pip install torch'
+			# (Userà la CPU o DirectML, ma il lavoro pesante lo farà Ollama esternamente)
