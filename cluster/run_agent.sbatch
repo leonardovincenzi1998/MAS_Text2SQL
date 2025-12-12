@@ -8,16 +8,16 @@
 #SBATCH --gres=gpu:1          # Richiede 1 GPU
 #SBATCH --mem=64G             # Richiede RAM di sistema adeguata
 #SBATCH --output=agent_log_%j.txt
-#SBATCH --chdir=/scratch.hpc/nome.cognome/tuo-progetto
+#SBATCH --chdir=/scratch.hpc/leonardo.vincenzi/mas_text2sql
 
 # 1. Setup Variabili (Cruciale per non riempire la Home)
-export HF_HOME=/scratch.hpc/nome.cognome/hf_cache
-export PIP_CACHE_DIR=/scratch.hpc/nome.cognome/.cache/pip # Devia la cache pip su scratch per sicurezza
-export TMPDIR=/scratch.hpc/nome.cognome/tmp # Devia i file temporanei
+export HF_HOME=/scratch.hpc/leonardo.vincenzi/hf_cache
+export PIP_CACHE_DIR=/scratch.hpc/leonardo.vincenzi/.cache/pip # Devia la cache pip su scratch per sicurezza
+export TMPDIR=/scratch.hpc/leonardo.vincenzi/tmp # Devia i file temporanei
 mkdir -p $TMPDIR
 
 # 2. Attiva Venv
-source /scratch.hpc/nome.cognome/venv/bin/activate
+source /scratch.hpc/leonardo.vincenzi/venv/bin/activate
 
 # 3. Avvio vLLM (Server)
 # NOTA: Qwen 32B AWQ richiede circa 18-20GB di VRAM. 

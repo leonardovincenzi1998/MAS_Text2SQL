@@ -16,7 +16,6 @@ sqlglot
 
 # --- Backend AI & GPU (Infrastruttura Cluster) ---
 vllm                       # Il server di inferenza ad alte prestazioni (sostituisce Ollama)
-torch                      # PyTorch (Backend tensoriale)
 transformers               # Libreria base per modelli HuggingFace
 accelerate                 # Gestione efficiente del caricamento modelli su GPU
 bitsandbytes               # Necessario se vuoi usare modelli quantizzati (es. 8-bit/4-bit) per risparmiare VRAM
