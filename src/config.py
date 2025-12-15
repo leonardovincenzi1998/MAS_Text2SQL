@@ -2,17 +2,17 @@ import os
 from pydantic_ai.models.openai import OpenAIChatModel
 
 #Configurazione
-#LLM_MODEL_NAME = 'llama3.1'
-#BASE_URL = 'http://localhost:11434/v1'
-#API_KEY = 'ollama'
+LLM_MODEL_NAME = 'llama3.1'
+BASE_URL = 'http://localhost:11434/v1'
+API_KEY = 'ollama'
 
 #Configurazione cluster
 
-LLM_MODEL_NAME = 'Qwen/Qwen2.5-32B-Instruct-AWQ' 
+# LLM_MODEL_NAME = 'Qwen/Qwen2.5-32B-Instruct-AWQ' 
 
-# Configurazione vLLM su Cluster
-BASE_URL = 'http://localhost:8000/v1'
-API_KEY = 'EMPTY'
+# # Configurazione vLLM su Cluster
+# BASE_URL = 'http://localhost:8000/v1'
+# API_KEY = 'EMPTY'
 
 def get_model():
     """

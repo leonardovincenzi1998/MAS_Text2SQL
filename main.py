@@ -75,7 +75,7 @@ from src.graph import app
 
 # Configura qui il percorso assoluto o relativo del file SQLite
 # Esempio: "/mnt/data/cluster_inventory_v2.sqlite"
-REAL_DB_PATH = "Terreni_Fabbricati.db" 
+REAL_DB_PATH = "C:\\Users\\lvincenzi\\Tesi\\Terreni_Fabbricati.db" 
 
 async def main():
     # --- CONFIGURAZIONE ARGOMENTI ---
@@ -88,7 +88,6 @@ async def main():
     parser.add_argument("--db", type=str, default=REAL_DB_PATH, help="Percorso del file database")
     
     args = parser.parse_args()
-    
     user_query = args.query
     db_path = args.db
 
@@ -120,20 +119,35 @@ async def main():
         if final_state.get("error"):
             print(f"❌ Errore durante l'esecuzione: {final_state['error']}")
         else:
-            print("🎯 TABELLE SELEZIONATE DALL'AGENTE:")
+            print("🚀 ESTRAZIONE E SELEZIONE COMPLETATA")
+            
+            # Info sull'estrazione
+            if final_state.get("extraction_result"):
+                print(f"\n📋 Intento Estratto: {final_state['extraction_result'].intent}")
+                print(f"🔑 Entità: {final_state['extraction_result'].entities}")
+
+            # Info su ChromaDB
+            print("\n📚 Schema Recuperato (ChromaDB):")
+            if final_state.get("candidate_tables_schema"):
+                # Stampiamo solo i primi 100 caratteri per non intasare la console, o tutto se vuoi debuggare
+                print(f"   (JSON Schema grezzo disponibile nello stato, lunghezza: {len(final_state['candidate_tables_schema'])} chars)")
+            else:
+                print("   Nessuno schema trovato.")
+
+            # Risultato finale
+            print("\n🎯 TABELLE SELEZIONATE DALL'AGENTE:")
             print(final_state["selected_tables"])
             
-            print("\n🧠 RAGIONAMENTO:")
-            if final_state["messages"]:
-                last_msg = final_state["messages"][-1]
-                content = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
-                print(content)
-            else:
-                print("Nessun messaggio di ragionamento disponibile.")
+            # Log dell'ultimo messaggio (Ragionamento)
+            print("\n🧠 LOG:")
+            print(final_state["messages"][-1])
+
         print("-" * 50)
 
     except Exception as e:
         print(f"❌ Exception non gestita: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     asyncio.run(main())
