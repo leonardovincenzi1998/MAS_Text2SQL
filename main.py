@@ -116,31 +116,42 @@ async def main():
 
         # --- 4. Stampa Risultati ---
         print("-" * 50)
+        
+        # Gestione Errori
         if final_state.get("error"):
             print(f"❌ Errore durante l'esecuzione: {final_state['error']}")
+        
         else:
             print("🚀 ESTRAZIONE E SELEZIONE COMPLETATA")
             
-            # Info sull'estrazione
+            # 1. Info sull'estrazione (Agente 1)
             if final_state.get("extraction_result"):
-                print(f"\n📋 Intento Estratto: {final_state['extraction_result'].intent}")
-                print(f"🔑 Entità: {final_state['extraction_result'].entities}")
+                res = final_state['extraction_result']
+                print(f"\n📋 [Agente 1] Intento:     {res.intent}")
+                print(f"🔑 [Agente 1] Entità:      {res.entities}")
+                print(f"⚙️  [Agente 1] Operazioni:  {res.operations}") # <--- ECCO LA RIGA AGGIUNTA
+            else:
+                print("\n⚠️ Nessun risultato di estrazione trovato.")
 
-            # Info su ChromaDB
-            print("\n📚 Schema Recuperato (ChromaDB):")
+            # 2. Info su ChromaDB (Ricerca Vettoriale)
+            print("\n📚 [Vector DB] Schema Recuperato:")
             if final_state.get("candidate_tables_schema"):
-                # Stampiamo solo i primi 100 caratteri per non intasare la console, o tutto se vuoi debuggare
-                print(f"   (JSON Schema grezzo disponibile nello stato, lunghezza: {len(final_state['candidate_tables_schema'])} chars)")
+                # Se è troppo lungo ne stampiamo solo un pezzo, oppure tutto se preferisci
+                schema_len = len(final_state['candidate_tables_schema'])
+                print(f"   (JSON Schema trovato, lunghezza: {schema_len} caratteri)")
             else:
                 print("   Nessuno schema trovato.")
 
-            # Risultato finale
-            print("\n🎯 TABELLE SELEZIONATE DALL'AGENTE:")
-            print(final_state["selected_tables"])
+            # 3. Risultato Selezione (Agente 2)
+            print("\n🎯 [Agente 2] TABELLE SELEZIONATE:")
+            print(final_state.get("selected_tables", "Nessuna tabella selezionata"))
             
-            # Log dell'ultimo messaggio (Ragionamento)
-            print("\n🧠 LOG:")
-            print(final_state["messages"][-1])
+            # Se hai accesso all'oggetto TableSelectionResult (che è dentro selected_tables o altrove)
+            # Nota: LangGraph di solito salva solo l'ultimo stato. 
+            # Se vuoi vedere il "reasoning", dovremmo averlo salvato nello state o dedurlo dall'ultimo messaggio.
+            
+            last_msg = final_state["messages"][-1]
+            print(f"\n🧠 [Agente 2] LOG/RAGIONAMENTO:\n{last_msg}")
 
         print("-" * 50)
 
@@ -148,6 +159,6 @@ async def main():
         print(f"❌ Exception non gestita: {e}")
         import traceback
         traceback.print_exc()
-
+        
 if __name__ == "__main__":
     asyncio.run(main())

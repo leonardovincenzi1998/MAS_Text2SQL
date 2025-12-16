@@ -18,7 +18,7 @@ class SearchSchemaInput(BaseModel):
         description="Le parole chiave o la descrizione in linguaggio naturale dei dati che stai cercando (es. 'vincoli paesaggistici', 'anagrafica clienti')."
     )
     k: int = Field(
-        default=3,
+        default=5,
         description="Il numero di tabelle simili da recuperare. Default è 3."
     )
 

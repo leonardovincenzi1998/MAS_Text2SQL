@@ -42,8 +42,14 @@ Reasoning Mode:
 Think step-by-step. Focus on business logic and data retrieval requirements.
 
 #####EXAMPLES#####
-Input: Group counties by state and calculate the average perimeter.
-Output: Intent='Group counties by state and perform calculations', Entities=['counties', 'state'], Operations=['group', 'calculate', 'average']
+Input: "Group vincoli for each fabbricato"
+Output: Intent="Raggruppare i vincoli per ogni fabbricato", Entities=["Vincoli", "Fabbricati"], Operations=["Group"]
+
+Input: "Calculate average surface of Terreni"
+Output: Intent="Calcolare media superficie terreni", Entities=["Terreni", "Superficie"], Operations=["Average"]
+
+Input: "Quanti vincoli ci sono?"
+Output: Intent="Conteggio vincoli", Entities=["Vincoli"], Operations=["Conta"]
 """
 
 # ---------------------------------------------------------
@@ -88,7 +94,7 @@ async def run_table_selector(state: AgentState):
     1. Cerca tabelle simili in ChromaDB usando le keyword estratte dal Nodo 1.
     2. Usa l'LLM per filtrare e selezionare solo quelle utili.
     """
-    print("   🔍 (Table Selector) Ricerca tabelle nel Vector Store...")
+    print("🔍 (Table Selector) Ricerca tabelle nel Vector Store...")
     
     extraction = state.get("extraction_result")
     
@@ -109,7 +115,8 @@ async def run_table_selector(state: AgentState):
     # --- B. RAGIONAMENTO LLM ---
     print("   🧠 (Table Selector) Ragionamento sulle tabelle trovate...")
     
-    selector_prompt = """Sei un Data Engineer esperto. 
+    selector_prompt = """
+    Sei un Data Engineer esperto. 
     Il tuo obiettivo è selezionare SOLO le tabelle SQL strettamente necessarie per rispondere alla domanda dell'utente.
     
     Hai a disposizione un sottoinsieme dello schema del database (in formato JSON) recuperato tramite ricerca semantica.
@@ -127,20 +134,64 @@ async def run_table_selector(state: AgentState):
     structured_llm = llm.with_structured_output(TableSelectionResult)
     chain = prompt | structured_llm
     
+####################################
+    # user_prompt_context = f"""
+    # ANALIZZA I SEGUENTI DATI E SELEZIONA LE TABELLE.
+
+    # SCHEMA TROVATO (JSON):
+    # {schema_json}
+    
+    # DOMANDA UTENTE: {state['user_query']}
+    # INTENTO ESTRATTO: {extraction.intent if extraction else "Generico"}
+    # """
+    
+    # # --- 🕵️‍♀️ LA SPIA ---
+    # print("\n" + "="*30)
+    # print("📝 COSA STO INVIANDO ALL'AGENTE 2:")
+    # print(user_prompt_context) # <--- Stampa tutto il contesto
+    # print("="*30 + "\n")
+    # # ------------------
+####################################
+
     try:
+        # Eseguiamo la catena passando tutti i dati necessari
         result: TableSelectionResult = await chain.ainvoke({
             "schema": schema_json,
             "query": state["user_query"],
             "intent": extraction.intent if extraction else "Generico"
         })
         
+        # --- COSTRUZIONE DEL LOG RICCO ---
+        # Qui formattiamo il messaggio che vedrai stampato nel main.py
+        log_message = (
+            f"✅ SELEZIONE COMPLETATA.\n"
+            f"🧠 RAGIONAMENTO: {result.reasoning}\n" 
+            f"📂 TABELLE: {result.relevant_tables}"
+        )
+
         return {
             "selected_tables": result.relevant_tables,
             "candidate_tables_schema": schema_json, 
-            "messages": [f"Tabelle selezionate: {result.relevant_tables}"]
+            "messages": [log_message] # <--- Ora il main.py stamperà anche il ragionamento!
         }
+        
     except Exception as e:
          return {"error": f"Errore nell'LLM Selector: {str(e)}"}
+
+    # try:
+    #     result: TableSelectionResult = await chain.ainvoke({
+    #         "schema": schema_json,
+    #         "query": state["user_query"],
+    #         "intent": extraction.intent if extraction else "Generico"
+    #     })
+        
+    #     return {
+    #         "selected_tables": result.relevant_tables,
+    #         "candidate_tables_schema": schema_json, 
+    #         "messages": [f"Tabelle selezionate: {result.relevant_tables}"]
+    #     }
+    # except Exception as e:
+    #      return {"error": f"Errore nell'LLM Selector: {str(e)}"}
     
 
 

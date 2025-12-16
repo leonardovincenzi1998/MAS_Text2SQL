@@ -30,33 +30,41 @@ def get_schema_representation(db_path):
     documents = []
     
     for table in tables:
-        # Prende le colonne
+        # --- 1. RECUPERO COLONNE ---
         cursor.execute(f"PRAGMA table_info({table});")
         columns = cursor.fetchall()
         col_desc = ", ".join([f"{col[1]} ({col[2]})" for col in columns])
         
-        # Prende le Foreign Keys (importante per le relazioni!)
+        # --- 2. RECUPERO FOREIGN KEYS ---
         cursor.execute(f"PRAGMA foreign_key_list({table});")
         fks = cursor.fetchall()
-        fk_desc = ""
-        if fks:
-            fk_list = [f"linked to {fk[2]}.{fk[3]}" for fk in fks]
-            fk_desc = f". Relazioni: {', '.join(fk_list)}"
+        # Inizializziamo le variabili per entrambi gli scopi
+        fk_desc = ""          # Per l'EMBEDDING (Testo discorsivo)
+        fk_definitions = []   # Per i METADATA (Schema tecnico per LLM)
 
-        # --- CREAZIONE DEL CONTENUTO SEMANTICO ---
-        # Questo è il testo che l'AI userà per cercare. Deve essere descrittivo.
-        # Mischiamo Italiano (per i nomi colonne) e Inglese (per struttura) per robustezza.
+        if fks:
+            # A. Costruiamo la lista tecnica per l'LLM
+            # fk[2]=Tabella Target, fk[3]=Colonna From, fk[4]=Colonna To
+            for fk in fks:
+                fk_definitions.append(f"FOREIGN KEY ({fk[3]}) REFERENCES {fk[2]}({fk[4]})")
+            
+            # B. Costruiamo la stringa discorsiva per la ricerca semantica
+            fk_list_text = [f"linked to {fk[2]} via {fk[3]}" for fk in fks]
+            fk_desc = f". Relazioni: {', '.join(fk_list_text)}"
+
+      # --- 3. CREAZIONE CONTENUTO SEMANTICO (Per la ricerca) ---
         text_content = (
             f"Tabella: {table}. "
             f"Colonne: {col_desc}. "
             f"Contesto: Questa tabella contiene dati riguardanti {table}{fk_desc}."
         )
         
-        # Creiamo il JSON completo da salvare nei metadati (per l'Agente 2)
+        # --- 4. CREAZIONE METADATI (Per l'Agente) ---
         metadata_schema = {
             "table_name": table,
             "columns": [col[1] for col in columns],
-            "ddl": f"CREATE TABLE {table} ({col_desc})" # Semplificato
+            "foreign_keys": fk_definitions, # <--- Ora questo è popolato correttamente
+            "ddl": f"CREATE TABLE {table} ({col_desc})" 
         }
 
         # Creiamo il documento LangChain
