@@ -108,7 +108,7 @@ async def run_table_selector(state: AgentState):
     try:
         # search_schema_tool.invoke è sincrono, ma va bene qui.
         # Restituisce una stringa JSON con le tabelle candidate.
-        schema_json = search_schema_tool.invoke({"query": search_query, "k": 5})
+        schema_json = search_schema_tool.invoke({"query": search_query, "k": 15})
     except Exception as e:
         return {"error": f"Errore nel recupero schema da Chroma: {str(e)}"}
     
@@ -128,6 +128,8 @@ async def run_table_selector(state: AgentState):
     INTENTO ESTRATTO: {intent}
     
     Analizza la struttura delle tabelle fornite e restituisci la selezione finale.
+
+    ATTENZIONE: Controlla SEMPRE le Foreign Key. Se vedi ad esempio un IdLocale, cerca se esiste la tabella Locali nella lista fornita.
     """
     
     prompt = ChatPromptTemplate.from_template(selector_prompt)
@@ -193,12 +195,6 @@ async def run_table_selector(state: AgentState):
     # except Exception as e:
     #      return {"error": f"Errore nell'LLM Selector: {str(e)}"}
     
-
-
-
-
-
-
 
 
 

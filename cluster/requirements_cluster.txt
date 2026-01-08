@@ -1,9 +1,13 @@
 # --- Framework Agenti & Orchestrazione ---
 langgraph
 langchain
+langchain-openai
 langchain-community
 langchain-huggingface      # Integrazione nativa con modelli HF
 openai                     # Client standard usato da PydanticAI per parlare con vLLM
+chromadb
+langchain-chroma
+sentence-transformers
 
 # --- Gestione Dati & Strutture ---
 pydantic-ai
@@ -15,7 +19,7 @@ sqlalchemy
 sqlglot
 
 # --- Backend AI & GPU (Infrastruttura Cluster) ---
-vllm                       # Il server di inferenza ad alte prestazioni (sostituisce Ollama)
+vllm==0.6.4.post1                       # Il server di inferenza ad alte prestazioni (sostituisce Ollama)
 transformers               # Libreria base per modelli HuggingFace
 accelerate                 # Gestione efficiente del caricamento modelli su GPU
 bitsandbytes               # Necessario se vuoi usare modelli quantizzati (es. 8-bit/4-bit) per risparmiare VRAM
@@ -23,3 +27,6 @@ bitsandbytes               # Necessario se vuoi usare modelli quantizzati (es. 8
 # --- Utility ---
 python-dotenv              # Gestione variabili d'ambiente (.env)
 huggingface_hub[cli]       # Per scaricare i modelli e login (inclusa CLI)
+
+## Dentro run_agent.sbatch, nella sezione setup o prima di avviare
+#pip install langchain-chroma langchain-huggingface sentence-transformers --no-cache-dir

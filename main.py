@@ -74,8 +74,8 @@ from langchain_core.messages import HumanMessage
 from src.graph import app
 
 # Configura qui il percorso assoluto o relativo del file SQLite
-# Esempio: "/mnt/data/cluster_inventory_v2.sqlite"
-REAL_DB_PATH = "C:\\Users\\lvincenzi\\Tesi\\Terreni_Fabbricati.db" 
+#REAL_DB_PATH = "C:\\Users\\lvincenzi\\Tesi\\Terreni_Fabbricati.db" locale
+REAL_DB_PATH = "cloneDefinitivoDB.db" 
 
 async def main():
     # --- CONFIGURAZIONE ARGOMENTI ---
@@ -86,6 +86,8 @@ async def main():
     
     # Argomento opzionale: Il DB (utile se vuoi cambiare file senza toccare il codice)
     parser.add_argument("--db", type=str, default=REAL_DB_PATH, help="Percorso del file database")
+
+    parser.add_argument("--chroma_path", type=str, default=None, help="Percorso del Vector DB (Chroma)")
     
     args = parser.parse_args()
     user_query = args.query

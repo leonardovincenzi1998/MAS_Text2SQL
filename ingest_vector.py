@@ -1,15 +1,23 @@
+import sqlite3
+import json
+import argparse
 import asyncio
-import os
-import sqlite3 # Usiamo sqlite3 diretto per semplicità nello script di ingest
+import os    
 import chromadb
+from chromadb.utils import embedding_functions
 from src.database import DatabaseManager
 from src.config import get_model
 from pydantic_ai import Agent
 
-# --- CONFIGURAZIONE ---
-DB_PATH = "C:\\Users\\lvincenzi\\Tesi\\Terreni_Fabbricati.db" 
-CHROMA_PATH = "./chroma_db_data"
-COLLECTION_NAME = "sql_schema_metadata"
+# --- CONFIGURAZIONE DEFAULT (Sovrascritta dagli argomenti) ---
+# Usiamo percorsi relativi sicuri come fallback
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_DB_PATH = os.path.join(BASE_DIR, "cloneDefinitivoDB.db")
+DEFAULT_CHROMA_PATH = os.path.join(BASE_DIR, "chroma_db_data")
+
+# IMPORTANTE: LangChain di default usa la collection "langchain". 
+# Usiamo questo nome per garantire compatibilità immediata con tools.py
+COLLECTION_NAME = "langchain"
 
 # --- PROMPT AGGIORNATO (Context-Aware) ---
 DESCRIPTION_AGENT_PROMPT = """
@@ -30,99 +38,106 @@ Required output: ONLY the text of the description.
 """
 
 def get_table_samples(db_path: str, table_name: str) -> str:
-    """
-    Extracts 3 sample rows from the table to provide context to the LLM.
-    """
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        # Prende 3 righe a caso o le prime 3
         cursor.execute(f"SELECT * FROM {table_name} LIMIT 3")
         rows = cursor.fetchall()
-        
-        # Recupera anche i nomi delle colonne per formattare bene
         col_names = [description[0] for description in cursor.description]
         conn.close()
         
         if not rows:
-            return "Nessun dato presente nella tabella."
+            return "Nessun dato presente."
             
-        # Formatta come testo leggibile
         sample_text = f"Colonne: {', '.join(col_names)}\n"
         for i, row in enumerate(rows):
             sample_text += f"Riga {i+1}: {str(row)}\n"
-            
         return sample_text
     except Exception as e:
-        return f"Impossibile recuperare campioni: {e}"
+        return f"Errore campioni: {e}"
 
 async def generate_table_description(ddl_text: str, samples_text: str) -> str:
-    """
-    Uses the LLM to generate a semantic description using DDL + Data.
-    """
     agent = Agent(
         model=get_model(),
         system_prompt=DESCRIPTION_AGENT_PROMPT
     )
-    
-    user_content = f"""
-    --- DDL TABELLA ---
-    {ddl_text}
-    
-    --- DATI CAMPIONE (Context) ---
-    {samples_text}
-    """
-    
+    user_content = f"--- DDL ---\n{ddl_text}\n--- SAMPLES ---\n{samples_text}"
     result = await agent.run(user_content)
     return result.output
 
 async def main():
-    if not os.path.exists(DB_PATH):
-        print(f"❌ Errore: Database '{DB_PATH}' non trovato.")
+    # --- 1. Parsing Argomenti (Per funzionare bene con SLURM) ---
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--db_path", default=os.getenv("DB_PATH", DEFAULT_DB_PATH))
+    parser.add_argument("--chroma_path", default=os.getenv("CHROMA_PATH", DEFAULT_CHROMA_PATH))
+    args = parser.parse_args()
+
+    db_path = args.db_path
+    chroma_path = args.chroma_path
+
+    if not os.path.exists(db_path):
+        print(f"❌ Errore: Database non trovato in: {db_path}")
         return
 
-    print(f"🔌 Connessione al DB SQLite: {DB_PATH}...")
-    db_manager = DatabaseManager(DB_PATH)
+    print(f"🔌 DB SQL: {db_path}")
+    print(f"💾 Vector DB: {chroma_path}")
+
+    db_manager = DatabaseManager(db_path)
     tables = db_manager.search_tables(None)
     
-    # Inizializzazione Chroma
-    print(f"💾 Inizializzazione ChromaDB in: {CHROMA_PATH}...")
-    chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
-    collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+    # --- 2. Setup Chroma con Embeddings COMPATIBILI ---
+    # Usiamo SentenceTransformer esplicitamente per matchare 'all-MiniLM-L6-v2' di tools.py
+    print("🧠 Caricamento funzione di embedding...")
+    emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name="all-MiniLM-L6-v2"
+    )
 
-    # Pulizia (Opzionale)
-    if collection.count() > 0:
-        print("🧹 Pulizia vecchia collezione...")
+    chroma_client = chromadb.PersistentClient(path=chroma_path)
+    
+    # Reset della collezione per evitare duplicati
+    try:
         chroma_client.delete_collection(COLLECTION_NAME)
-        collection = chroma_client.get_or_create_collection(name=COLLECTION_NAME)
+        print("🧹 Collezione esistente rimossa.")
+    except:
+        pass
 
-    print("\n🚀 Inizio Arricchimento Semantico (DDL + Dati)...")
+    collection = chroma_client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=emb_fn
+    )
+
+    print("\n🚀 Inizio Arricchimento Semantico...")
 
     for table in tables:
-        print(f"   👉 Processando tabella: {table}...")
+        print(f"   👉 Processando: {table}...")
         
-        # 1. DDL
         ddl = db_manager.get_table_ddl(table)
+        samples = get_table_samples(db_path, table)
         
-        # 2. CAMPIONI (La protezione contro le allucinazioni)
-        samples = get_table_samples(DB_PATH, table)
-        
-        # 3. GENERAZIONE DESCRIZIONE
+        # Generazione descrizione con LLM (Qwen)
         description = await generate_table_description(ddl, samples)
-        print(f"      📝 Descrizione: {description[:80]}...") 
         
-        # 4. SALVATAGGIO
+        # --- 3. SALVATAGGIO FORMATO COMPATIBILE CON TOOLS.PY ---
+        # tools.py si aspetta: json.loads(doc.metadata.get("table_schema"))
+        # Quindi dobbiamo salvare un JSON dentro il campo 'table_schema'.
+        
+        metadata_payload = {
+            "table_name": table,
+            "original_ddl": ddl,
+            "generated_description": description
+        }
+
         collection.add(
             documents=[description],
             metadatas=[{
-                "table_name": table, 
-                "original_ddl": ddl,
-                "sample_data_snapshot": samples[:200] # Opzionale: salviamo anche un pezzetto di dati per debug
+                "table_name": table,
+                # IL TRUCCO: Salviamo il json come stringa dentro un campo specifico
+                "table_schema": json.dumps(metadata_payload) 
             }],
             ids=[table]
         )
 
-    print(f"\n✅ Ingestion Completata! {collection.count()} tabelle.")
+    print(f"\n✅ Ingestion Completata! {collection.count()} tabelle indicizzate.")
 
 if __name__ == "__main__":
     asyncio.run(main())

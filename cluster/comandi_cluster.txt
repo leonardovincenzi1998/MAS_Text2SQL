@@ -20,13 +20,16 @@ git --version
 # Caricare il codice
 git clone https://github.com/tuo-username/tuo-progetto.git
 #per caricare SOLO il database - TERMINALE PC AZIENDALE
-scp /percorso/locale/nomefileSQLite.db nome.cognome@giano.cs.unibo.it:/scratch.hpc/nome.cognome/progetto/
+scp /percorso/locale/nomefileSQLite.db leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/progetto/
 #per caricare singolo file - TERMINALE PC AZIENDALE
 scp C:\Users\lvincenzi\Tesi\mas_text2sql\cluster\run_agent.sbatch leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/
 OPPURE
 #caricare con scp l'intera cartella del progetto - TERMINALE PC AZIENDALE
-scp -r /percorso/locale/progetto nome.cognome@giano.cs.unibo.it:/scratch.hpc/nome.cognome/
+scp -r /percorso/locale/progetto leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/
+"C:\Users\lvincenzi\Tesi\mas_text2sql"
 
+#scaricare file da cluster a locale
+scp leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/mas_text2sql/agent_log_22489.txt .
 
 # Poi installare il resto dal file, presente su github
 pip install --no-cache-dir -r requirements_cluster.txt #RICORDATI DI TOGLIERE TORCH qualora ci sia
@@ -44,9 +47,25 @@ sbatch run_agent.sbatch
 
 # Controlla lo stato del job (PENDING, RUNNING, etc.)
 squeue -u leonardo.vincenzi
+squeue --me
 
-# Leggi l'output in tempo reale (sostituisci il numero del job)
+# Leggi l'output in tempo reale (sostituisci il numero del job) o le ultime 10 righe se il job è finito
 tail -f agent_log_12345.txt
+
+#Leggi tutto l'output
+less agent_log_22489.txt
 
 #Il sistema metterà il job in coda. Quando parte, l'output finirà nel file
 agent_output_12345.log
+
+
+#Comandi per mantenere la sessione
+srun --nodes=1 --ntasks=1 --cpus-per-task=8 --gres=gpu:1 --mem=58G --partition=l40 --pty bash
+#una volta dentro il nodo
+
+cd /scratch.hpc/leonardo.vincenzi/mas_text2sql
+chmod +x start_session.sh
+./start_session.sh
+
+exit #per uscire dalla sessione delle domande
+exit #per uscire dal nodo con la sessione attiva

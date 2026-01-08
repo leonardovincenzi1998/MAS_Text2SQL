@@ -8,7 +8,11 @@ from langchain_huggingface import HuggingFaceEmbeddings
 
 # --- Configurazione ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) 
-CHROMA_PATH = os.path.join(BASE_DIR, "chroma_db_data")
+#CHROMA_PATH = os.path.join(BASE_DIR, "chroma_db_data")   locale
+
+# Cerca prima la variabile d'ambiente (impostata da SLURM), 
+# altrimenti usa il percorso locale di default.
+CHROMA_PATH = os.getenv("CHROMA_PATH", os.path.join(BASE_DIR, "chroma_db_data"))
 EMBEDDING_MODEL = "all-MiniLM-L6-v2" # DEVE essere lo stesso modello
 
 # --- 1. Definizione dell'Input con Pydantic ---
@@ -18,8 +22,8 @@ class SearchSchemaInput(BaseModel):
         description="Le parole chiave o la descrizione in linguaggio naturale dei dati che stai cercando (es. 'vincoli paesaggistici', 'anagrafica clienti')."
     )
     k: int = Field(
-        default=5,
-        description="Il numero di tabelle simili da recuperare. Default è 3."
+        default=15,
+        description="Il numero di tabelle simili da recuperare. Default è 10."
     )
 
 # --- 2. Inizializzazione Risorse (Lazy Loading) ---
@@ -35,7 +39,7 @@ def get_vectorstore():
 
 # --- 3. Il Tool vero e proprio ---
 @tool("search_schema_tool", args_schema=SearchSchemaInput)
-def search_schema_tool(query: str, k: int = 3) -> str:
+def search_schema_tool(query: str, k: int = 15) -> str:
     """
     Cerca nel database vettoriale le tabelle più rilevanti basandosi sulla query.
     Restituisce uno schema JSON ridotto ('Trimmed Schema') contenente solo le tabelle utili.
@@ -46,6 +50,19 @@ def search_schema_tool(query: str, k: int = 3) -> str:
         # Esegue la ricerca semantica
         results = vectorstore.similarity_search(query, k=k)
         
+        # --- 🛠️ BLOCCO DEBUG START 🛠️ ---
+        print(f"\n🔎 [DEBUG VECTOR DB] Ho trovato {len(results)} tabelle candidate per la query: '{query}'")
+        found_tables = []
+        for i, doc in enumerate(results):
+        # Recupera il nome tabella dai metadati (adatta la chiave se diversa, es. 'table_name')
+            tbl_name = doc.metadata.get("table_name", "N/A")
+            found_tables.append(tbl_name)
+            print(f"   {i+1}. {tbl_name} (Score/Metadata: {doc.metadata})")
+    
+        print(f"👀 Lista completa inviata all'LLM: {found_tables}")
+        print("-" * 50)
+        # --- 🛠️ BLOCCO DEBUG END 🛠️ ---
+
         if not results:
             return "Nessuna tabella trovata pertinente alla tua ricerca."
 
