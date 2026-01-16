@@ -11,6 +11,7 @@ from src.embedding_factory import get_chroma_embedding_function
 # Assumiamo che questi moduli esistano nel tuo progetto
 from src.database import DatabaseManager
 from src.config import get_model
+from src.naming import get_canonical_name
 
 # --- CONFIGURAZIONE ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -122,62 +123,97 @@ def analyze_columns_heuristics(db_path: str, table_name: str) -> str:
     
     return "\n".join(analysis_report)
 
-async def process_single_table(db_manager, db_path, table_name, collection, agent):
+def get_foreign_keys_robust(db_path: str, table_name: str) -> List[Dict]:
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # quoting per SQLite
+    safe_table = table_name.replace('"', '""')
+    cursor.execute(f'PRAGMA foreign_key_list("{safe_table}")')
+    fks = cursor.fetchall()
+    conn.close()
+
+    results = []
+    for fk in fks:
+        referenced_table_real = fk[2]
+        results.append({
+            "from_column": fk[3],
+            "to_table_canonical": get_canonical_name(referenced_table_real),
+            "to_table_real": referenced_table_real,
+            "to_column": fk[4]
+        })
+    return results
+
+
+async def process_single_table(db_manager, db_path, table_name, collection, agent, semaphore):
     """
     Processa una singola tabella: Estrazione -> Generazione -> Salvataggio
     """
     print(f"   ⏳ Analisi tabella: {table_name}...")
     
+    
     try:
-        # A. Estrazione Dati Tecnici
-        ddl = db_manager.get_table_ddl(table_name)
-        
-        # B. Analisi Euristica (Il 'Trick' dei valori categorici)
-        # Nota: Eseguiamo codice sincrono in thread separato per non bloccare asyncio
-        stats_text = await asyncio.to_thread(analyze_columns_heuristics, db_path, table_name)
-        
-        # C. Generazione Descrizione con LLM
-        user_content = f"--- DDL TABELLA ---\n{ddl}\n\n{stats_text}"
-        result = await agent.run(user_content)
-        description = result.output # In PydanticAI v0.27+ usa .data, altrimenti .output
-        
-        # D. Preparazione Metadata per tools.py
-        metadata_payload = {
-            "table_name": table_name,
-            "original_ddl": ddl,
-            "generated_description": description,
-            # Salviamo anche i hint categorici nel JSON per debug o uso futuro
-            "categorical_hints": stats_text 
-        }
 
-        # E. Inserimento nel Vector DB
-        # Creiamo un "Documento Ricco" che contiene sia la semantica che la tecnica
-        # Questo assicura che il retrieval funzioni sia per "Fatturato" che per "imp_net_tot"
-        rich_document = f"""
-        DESCRIZIONE SEMANTICA:
-        {description}
-        
-        DETTAGLI TECNICI E CATEGORIE:
-        {stats_text}
-        
-        SCHEMA SQL (DDL):
-        {ddl}
-        """
+        async with semaphore:
+            real_table_name = table_name
+            canonical_name = get_canonical_name(real_table_name)
+            foreign_keys = get_foreign_keys_robust(db_path, real_table_name)
+            # A. Estrazione Dati Tecnici
+            ddl = db_manager.get_table_ddl(real_table_name)
 
-        collection.add(
-            documents=[rich_document], # <--- Vettorializziamo TUTTO
-            metadatas=[{
-                "table_name": table_name,
-                "table_schema": json.dumps(metadata_payload)
-            }],
-            ids=[table_name]
-        )
-        print(f"   ✅ Tabella '{table_name}' completata.")
+        
+            # B. Analisi Euristica (Il 'Trick' dei valori categorici)
+            # Nota: Eseguiamo codice sincrono in thread separato per non bloccare asyncio
+            stats_text = await asyncio.to_thread(analyze_columns_heuristics, db_path, real_table_name)
+
+        
+            # C. Generazione Descrizione con LLM
+            user_content = f"--- DDL TABELLA ---\n{ddl}\n\n{stats_text}"
+            result = await agent.run(user_content)
+            description = result.output # In PydanticAI v0.27+ usa .data, altrimenti .output
+        
+            # D. Preparazione Metadata per tools.py
+            metadata_payload = {
+                "table_name": real_table_name,       # compatibilità
+                "real_table_name": real_table_name,  # nuovo standard
+                "canonical_name": canonical_name,
+                "foreign_keys": foreign_keys,
+                "original_ddl": ddl,
+                "generated_description": description,
+                "categorical_hints": stats_text
+            }
+
+            # E. Inserimento nel Vector DB
+            # Creiamo un "Documento Ricco" che contiene sia la semantica che la tecnica
+            # Questo assicura che il retrieval funzioni sia per "Fatturato" che per "imp_net_tot"
+            rich_document = f"""
+            DESCRIZIONE SEMANTICA:
+            {description}
+            
+            DETTAGLI TECNICI E CATEGORIE:
+            {stats_text}
+            
+            SCHEMA SQL (DDL):
+            {ddl}
+            """
+
+            collection.upsert(
+                documents=[rich_document],
+                metadatas=[{
+                    "table_name": real_table_name,      # compatibilità
+                    "real_table_name": real_table_name,
+                    "canonical_name": canonical_name,
+                    "table_schema": json.dumps(metadata_payload)
+                }],
+                ids=[canonical_name]
+            )
+
+            print(f"   ✅ Tabella '{table_name}' completata.")
         return True
 
     except Exception as e:
         print(f"   ❌ ERRORE su tabella '{table_name}': {e}")
-        return False
+    return False
 
 async def main():
     # --- 1. Setup ---
@@ -215,12 +251,14 @@ async def main():
     tables = db_manager.search_tables(None)
     print(f"🚀 Trovate {len(tables)} tabelle. Inizio arricchimento parallelo...")
 
-    
+    max_conc = int(os.getenv("INGEST_MAX_CONCURRENCY", "4"))
+    semaphore = asyncio.Semaphore(max(1, max_conc))
+
 
     # --- 3. Esecuzione Parallela ---
     # Creiamo un task per ogni tabella
     tasks = [
-        process_single_table(db_manager, args.db_path, table, collection, agent)
+        process_single_table(db_manager, args.db_path, table, collection, agent, semaphore)
         for table in tables
     ]
     

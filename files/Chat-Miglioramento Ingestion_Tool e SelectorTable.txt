@@ -1,0 +1,285 @@
+Bene ora ripartiamo da questi due allegati che ti dò:
+"ingest_vector.py" e "tools.py", che sono corretti e funzionanti con la gestione dei nomi canonici ecc.
+Vorrei approfondire i seguenti consigli, voglio sapere cosa ritieni necessario, cosa non serve, cosa è importante tra i consigli proposti:
+
+1) Estrazione colonne dal DDL: meglio salvarle in metadata in ingest
+
+L’estrazione colonne via regex sul DDL è fragile (tipi non coperti, definizioni multi-linea, vincoli, ecc.). In ingest hai accesso a SQLite e già fai introspezione: conviene salvare in metadata_payload un array strutturato con colonne e tipi (anche da PRAGMA table_info). Poi nel tool leggi quello, senza regex.
+
+2) Documento “ricco” per embedding: separa semantica e tecnica (opzionale ma utile)
+
+Vettorializzare anche il DDL aiuta su query tecniche, ma può introdurre “false positive” (DDL simili tra tabelle). Una strategia efficace è indicizzare due documenti per tabella:
+
+doc A: descrizione semantica + categorie
+
+doc B: DDL/tecnico
+Poi nel retrieval raggruppi per table_name e fai merge. Migliora la precisione senza perdere recall.
+
+3) Allinea i default di k e applica clamp
+
+Nel tool hai k nel model e un default diverso nella firma; nell’agente passi k=10. Allinea tutto e fai k = min(k, numero_tabelle) per evitare richieste “sovradimensionate” e risultati non deterministici.
+
+4) “Categorical hints”: ottimi, ma valuta una versione più strutturata
+
+Oggi categorical_hints è testo libero e include anche sezioni non sempre utili. Se puoi, separa già in ingest:
+
+categorical_values: dizionario colonna -> [valori]
+
+sample_rows: opzionale e limitato
+Così il selector (e soprattutto l’agente SQL successivo) può usare direttamente i valori come filtri senza rileggere testo.
+
+
+
+=======================================
+
+
+Ecco come la vedo **sui tuoi file attuali** (“ingest_vector.py” + “tools.py”), quindi non teoria: cosa conviene fare davvero, cosa è opzionale, cosa lascerei stare.
+
+---
+
+## 1) Estrazione colonne dal DDL: salvarle in metadata in ingest
+
+**Verdetto: IMPORTANTE (quasi “necessario”)**
+
+Oggi nel tool estrai le colonne con una regex sul DDL: copre solo un set limitato di tipi e può saltare definizioni più complesse. 
+In ingest però hai già introspezione vera via `PRAGMA table_info(...)`. 
+
+**Perché vale la pena**
+
+* Robustezza: niente più “colonne perse” perché il tipo non matcha la regex.
+* Migliora anche il lavoro dell’agente SQL: gli dai **colonne + tipo** strutturati, non dedotti.
+
+**Cosa fare (minimo)**
+
+* In ingest salva in `metadata_payload` una lista `columns_info` presa da `PRAGMA table_info`: `[{"name":..,"type":..,"pk":..,"notnull":..,"default":..}]`.
+* In tools usa quella lista e **rimuovi** `col_names = re.findall(...)`.
+
+---
+
+## 2) Documento “ricco” per embedding: separa semantica e tecnica
+
+**Verdetto: OPZIONALE (utile solo se vedi falsi positivi)**
+
+Oggi indicizzi un unico documento per tabella che contiene: descrizione + hints + DDL. 
+Questo può aumentare recall sulle query tecniche, ma può anche introdurre similarità spurie (DDL simili).
+
+**Con 25 tabelle**
+
+* Non è una priorità. Il rischio “precisione bassa” esiste, ma spesso lo senti solo quando aumenti tabelle o quando fai molte query “tecniche pure”.
+
+**Quando lo farei**
+
+* Se noti che domande tecniche (“colonna X”, “vincolo Y”) ti tirano dentro tabelle sbagliate perché hanno DDL simile.
+
+**Costo/complessità**
+
+* Devi deduplicare/merge nel tool, perché `similarity_search` ti può restituire 2 documenti della stessa tabella e tu vuoi una sola entry.
+
+---
+
+## 3) Allinea default di `k` e applica clamp
+
+**Verdetto: NECESSARIO (quick win a rischio zero)**
+
+Hai una incoerenza oggi:
+
+* `SearchSchemaInput.k` default = 10 
+* `search_schema_tool(..., k: int = 15)` default = 15 
+
+Questo non rompe tutto, ma crea comportamenti “non spiegabili” quando chi chiama pensa di usare un default e in realtà ne usa un altro.
+
+**Cosa fare (minimo)**
+
+* Scegli un default (10 o 15) e mettilo uguale in entrambi.
+* Clamp: `k = min(k, n_tabelle)` (puoi ottenere `n_tabelle` da `vectorstore._collection.count()` o da un `get` iniziale). Con 25 tabelle evita richieste “sovradimensionate” e rende i test più deterministici.
+
+---
+
+## 4) “Categorical hints”: meglio strutturati (dict), sample_rows opzionale
+
+**Verdetto: IMPORTANTE (soprattutto per l’agente SQL e per evitare “sporcizia” nel contesto)**
+
+Oggi `categorical_hints` è un testo lungo che include:
+
+* valori distinti 
+* e anche **campioni riga** (dict delle righe) 
+  Poi lo salvi così com’è in `metadata_payload`  e nel tool lo rimandi (troncato) come `categorical_values`. 
+
+**Perché è importante**
+
+* Un agente SQL lavora meglio con `{"status": ["shipped","pending"]}` che con testo da parsare.
+* I sample rows possono introdurre dati sensibili e comunque non sono “stabili” (cambiano al variare dei dati).
+
+**Cosa fare (minimo, pragmatico)**
+
+* In ingest salva:
+
+  * `categorical_values: Dict[col, List[val]]`
+  * `sample_rows: List[Dict]` **solo se ti serve davvero**, altrimenti disattivalo.
+* Nel tool esponi direttamente `categorical_values` (dict) e, se vuoi, metti `sample_rows` dietro flag/debug.
+
+---
+
+# Priorità consigliata
+
+1. **(3) Allineare e clampare `k`**: veloce e pulisce comportamento.  
+2. **(1) Colonne strutturate da PRAGMA**: elimina una fragilità vera (regex).  
+3. **(4) Categorical hints strutturati**: valore alto per l’agente SQL; rimuovi sample rows se non indispensabili.  
+4. **(2) Split doc semantico/tecnico**: lo farei solo se misuri falsi positivi o se aumenti scala. 
+
+Se vuoi, nel prossimo passo posso proporti **una patch minima concreta** (solo righe da aggiungere/modificare) per implementare **(1) + (3) + (4)** senza toccare il resto dell’architettura.
+
+
+========================================================
+
+Prima di procedere in questo senso, ti pongo questo quesito:
+Questo è l'output, che posso anche ritenere soddisfacente:
+
+🤖 Domanda Utente: 'Voglio i beni mobili con etichetta con valore 1 come prima apertura'
+
+🕵️‍♀️ (Entity Extractor) Analisi query: 'Voglio i beni mobili con etichetta con valore 1 come prima apertura'
+🔍 (Table Selector) Ricerca tabelle...
+   Testo usato per Chroma: 'Beni mobili Etichetta Valore 1 Prima apertura'
+
+🕸️  [GRAPH RAG] Start: 10 anchor tables trovate con BGE-M3.
+🔗 [GRAPH RAG] Espansione: Trovate 4 tabelle collegate mancanti: {'cdgcdc', 'gruppiammortamento', 'vocimastrino', 'locali'}
+📊 [GRAPH RAG] Totale tabelle: 14
+📦 Peso Payload: ~8620 token
+🧠 (Table Selector) Filtering intelligente...
+--------------------------------------------------
+🚀 ESTRAZIONE E SELEZIONE COMPLETATA
+
+📋 [Agente 1] Intento:     Recuperare beni mobili con etichetta di valore 1 come prima apertura
+🔑 [Agente 1] Entità:      ['Beni mobili', 'Etichetta', 'Valore 1', 'Prima apertura']
+⚙️  [Agente 1] Operazioni:  []
+
+📚 [Vector DB] Schema Recuperato:
+   (JSON Schema trovato, lunghezza: 34482 caratteri)
+
+🎯 [Agente 2] TABELLE SELEZIONATE:
+['BeniMobili', 'GruppiValoreInv', 'ValoriInv', 'VMValoriInv', 'TipiValoreInv']
+
+🧠 [Log/Ragionamento Finale]:
+✅ Tabelle Selezionate: ['BeniMobili', 'GruppiValoreInv', 'ValoriInv', 'VMValoriInv', 'TipiValoreInv']
+🤔 Ragionamento: Scelgo `BeniMobili` per ottenere i beni mobili con l'etichetta di valore 1. `GruppiValoreInv` è necessario per identificare i gruppi di valore associati ai beni mobili. `ValoriInv` fornisce i valori di investimento associati ai gruppi di valore. `VMValoriInv` è necessario per collegare i valori di investimento con le voci mastri. Infine, `TipiValoreInv` è necessario per filtrare i valori di investimento che hanno la prima apertura.
+--------------------------------------------------
+
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+💬 Scrivi la tua domanda: Quali sono i beni mobili con etichetta con valore 1 come prima apertura?
+
+🤖 Domanda Utente: 'Quali sono i beni mobili con etichetta con valore 1 come prima apertura?'
+
+🕵️‍♀️ (Entity Extractor) Analisi query: 'Quali sono i beni mobili con etichetta con valore 1 come prima apertura?'
+🔍 (Table Selector) Ricerca tabelle...
+   Testo usato per Chroma: 'Beni mobili Etichetta Valore 1 Prima apertura'
+
+🕸️  [GRAPH RAG] Start: 10 anchor tables trovate con BGE-M3.
+🔗 [GRAPH RAG] Espansione: Trovate 4 tabelle collegate mancanti: {'cdgcdc', 'gruppiammortamento', 'vocimastrino', 'locali'}
+📊 [GRAPH RAG] Totale tabelle: 14
+📦 Peso Payload: ~8620 token
+🧠 (Table Selector) Filtering intelligente...
+--------------------------------------------------
+🚀 ESTRAZIONE E SELEZIONE COMPLETATA
+
+📋 [Agente 1] Intento:     Identificare beni mobili con etichetta di valore 1 come prima apertura
+🔑 [Agente 1] Entità:      ['Beni mobili', 'Etichetta', 'Valore 1', 'Prima apertura']
+⚙️  [Agente 1] Operazioni:  ['Filtra']
+
+📚 [Vector DB] Schema Recuperato:
+   (JSON Schema trovato, lunghezza: 34482 caratteri)
+
+🎯 [Agente 2] TABELLE SELEZIONATE:
+['BeniMobili', 'GruppiValoreInv', 'TipiValoreInv']
+
+🧠 [Log/Ragionamento Finale]:
+✅ Tabelle Selezionate: ['BeniMobili', 'GruppiValoreInv', 'TipiValoreInv']
+🤔 Ragionamento: Scelgo `BeniMobili` perché contiene le informazioni sui beni mobili, inclusa l'etichetta. `GruppiValoreInv` è necessario per identificare i gruppi di valore con la descrizione 'Prima apertura'. Infine, `TipiValoreInv` è selezionato per filtrare i tipi di valore contabile che hanno la flag `IsPrimaApertura` impostata su 1.
+--------------------------------------------------
+
+
+Quello che non mi va bene è che basta cambiare una parola all'inizio della domanda, e nel secondo caso mi riporta meno tabelle. Ciò è sbagliato in quanto la risposta migliore mi è stata data nel primo caso. Come sistemo? Da cosa è causato?
+
+=====
+
+È causato **quasi certamente** da una cosa molto semplice: **la selezione finale delle tabelle non è deterministica** perché è guidata da un LLM (il “Filtering intelligente”), e il suo input cambia anche solo per una variazione minima della domanda.
+
+Nel tuo log la parte “RAG” è identica:
+
+* stessa stringa passata a Chroma: `Beni mobili Etichetta Valore 1 Prima apertura`
+* stessi anchor (10)
+* stessa espansione FK (4 tabelle)
+* stesso payload (~8620 token, 14 tabelle)
+
+Quindi la variabilità **non nasce dal retrieval**: nasce dopo, quando il modello decide “quali tabelle bastano”.
+
+## Perché cambia così tanto con una parola
+
+Ci sono due cause tipiche (spesso insieme):
+
+### 1) Il tuo “Entity/Operation extractor” è instabile
+
+Nel primo caso l’estrattore operazioni produce `[]`, nel secondo produce `['Filtra']`.
+Quella differenza cambia il prompt/contesto del selettore e lo porta a “minimizzare” diversamente.
+
+In altre parole: “Voglio …” e “Quali sono …” non dovrebbero cambiare le operazioni/intent, ma nel tuo pipeline lo fanno.
+
+### 2) Il selector sta ottimizzando per “lista minima”
+
+Se il prompt del selettore spinge a “scegliere solo le tabelle necessarie”, basta una sfumatura linguistica per convincerlo che **non servono le tabelle ponte** (junction / bridge) anche se in realtà servono per collegare i filtri alla tabella target.
+
+Questo è un classico: l’LLM vede “IsPrimaApertura=1” in una tabella e pensa che basti, ma ignora che per arrivare a “beni mobili con etichetta valore 1” devi attraversare altre tabelle.
+
+---
+
+# Come lo sistemi (in ordine di efficacia)
+
+## A) Fix rapido: rendi deterministica la parte LLM
+
+Se il tuo selector gira con temperature > 0 (o sampling “aperto”), la variabilità aumenta.
+
+* imposta **temperature=0** (e top_p=1, se configurabile) per l’agente di selezione tabelle
+* se il runtime supporta seed fisso, usa anche quello
+
+Questo da solo spesso stabilizza parecchio, ma non garantisce che includa sempre le tabelle ponte.
+
+## B) Fix “giusto”: post-processing deterministico con il grafo FK
+
+Questa è la soluzione più robusta e “da ingegneria”, e tu hai già i prerequisiti (FK robuste in metadata).
+
+Flusso consigliato:
+
+1. l’LLM sceglie le “core tables” (target + tabelle che contengono i filtri)
+2. **poi** il codice aggiunge automaticamente le tabelle ponte necessarie per connettere tutto, usando BFS sul grafo FK (shortest path tra le core tables)
+
+Risultato: anche se l’LLM dice 3 tabelle, il “join-closure” aggiunge automaticamente `ValoriInv`, `VMValoriInv`, ecc. se servono a connettere.
+
+Questa è la chiave per eliminare l’effetto “una parola cambia tutto”.
+
+## C) Stabilizza l’estrattore intent/operazioni
+
+Per evitare che “Voglio” vs “Quali sono” cambi l’output:
+
+* fai estrarre **sempre** `intent=SELECT` + `operation=FILTER` quando ci sono condizioni (es. “valore 1”, “prima apertura”)
+* aggiungi esempi nel prompt: “Voglio…” e “Quali sono…” devono produrre lo stesso schema di intent/ops
+
+In pratica: il selector deve vedere lo stesso “task spec” a prescindere dal verbo introduttivo.
+
+## D) Se vuoi una garanzia a costo minimo: “union + dedup”
+
+Se non vuoi ancora implementare BFS sul grafo FK, un compromesso è:
+
+* fai girare il selector **2 volte** (o con prompt più “recall first”) e prendi **l’unione** delle tabelle (deduplicate)
+  È meno pulito del join-closure, ma riduce il rischio di “liste troppo corte”.
+
+---
+
+# Cosa farei io nel tuo caso (25 tabelle, già FK in metadata)
+
+1. renderei deterministic il selector (temperature 0)
+2. implementerei join-closure via FK (BFS) dopo la selezione LLM
+3. sistemerei l’estrattore operazioni per uniformare “Voglio” e “Quali sono”
+
+Se vuoi, nel prossimo messaggio ti scrivo **la patch minimale** (solo poche righe) per fare il join-closure nel punto giusto del tuo pipeline (tipicamente in `agent.py` dopo che l’LLM ha scelto le tabelle), usando le `foreign_keys` che già hai salvato in ingest.
+
+

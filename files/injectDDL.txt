@@ -1,0 +1,582 @@
+Questo output è stato eseguito su pc locale con llama3.1 8B su un db con 4 tabelle. Il test con qwen 2.5 32B devo ancora farlo e sarà con 25/28 tabelle.
+La mia domanda è, ma è conveniente che l'agente 2 produca tutto quel reasoning? Non basta che l'agente successivo SQL Generator abbia a disposizione solo queste informazioni:
+
+📋 [Agente 1] Intento:     Conteggio vincoli
+🔑 [Agente 1] Entità:      ['vincoli', 'fabbricati']
+⚙️  [Agente 1] Operazioni:  ['Count']
+
+🎯 [Agente 2] TABELLE SELEZIONATE:
+['Fabbricati', 'FabbricatiVincoli']
+
+Considera questa è graph.py:
+import json
+import re
+from langgraph.graph import StateGraph, END
+from .agent import run_entity_extractor, run_table_selector
+from .models import AgentState, SchemaDeps, TableSelectionResult
+from .database import DatabaseManager
+
+# Costruzione del grafo
+workflow = StateGraph(AgentState)
+
+# Aggiungi i nodi
+workflow.add_node("entity_extractor", run_entity_extractor)
+workflow.add_node("table_selector", run_table_selector)
+
+# Definisci il flusso
+workflow.set_entry_point("entity_extractor")
+# Dall'estrazione passiamo alla selezione tabelle
+workflow.add_edge("entity_extractor", "table_selector")
+
+#Dopo la selezione, finiamo
+workflow.add_edge("table_selector", END)
+
+app = workflow.compile()
+
+
+
+===============RISPOSTA=======================
+La risposta breve è: **Sì, è conveniente e ti consiglio di mantenerlo**, ma con una precisazione importante su *cosa* passare allo step successivo.
+
+Ecco perché quel "ragionamento verboso" non è uno spreco, ma anzi è il segreto per avere un'alta precisione, specialmente quando passerai a Qwen 32B e 28 tabelle.
+
+### 1. Il "Reasoning" serve all'Agente 2 per non sbagliare (Chain-of-Thought)
+
+Quello che vedi non è solo "chiacchiera". È il meccanismo di **Chain-of-Thought (CoT)**.
+Se tu forzassi l'Agente 2 a restituire *solo* la lista JSON `['Fabbricati', 'FabbricatiVincoli']` senza permettergli di generare prima il testo di ragionamento, **la precisione della selezione crollerebbe**.
+
+L'LLM ha bisogno di "scrivere per pensare". Scrivendo *"Mi serve la tabella vincoli perché l'utente vuole contare..."*, il modello auto-valida la sua scelta prima di commettere l'output finale.
+
+* Con 4 tabelle è facile.
+* Con **28 tabelle**, il rischio che selezioni una tabella con un nome simile ma sbagliata è alto. Il ragionamento riduce questo rischio.
+
+### 2. Cosa serve *davvero* all'Agente 3 (SQL Generator)?
+
+Qui c'è il punto critico della tua domanda. Tu chiedi se bastano:
+
+* Intento
+* Entità
+* Nomi delle tabelle (`['Fabbricati']`)
+
+**Risposta: NO, non bastano.**
+
+All'Agente 3 (SQL Generator) mancherebbe l'informazione più importante: **Lo Schema DDL (le colonne)** delle tabelle selezionate.
+Se gli passi solo `['Fabbricati']`, lui non sa se la colonna ID si chiama `id`, `id_fabbricato` o `codice_fabbricato`. Inventerebbe i nomi e la query fallirebbe.
+
+### Il Flusso Corretto (Best Practice)
+
+Tra l'Agente 2 (Selector) e l'Agente 3 (Generator) deve succedere una cosa tecnica:
+
+1. **Agente 2:** Esce con `selected_tables=['Fabbricati', 'FabbricatiVincoli']` e il `reasoning`.
+2. **Tool/Funzione intermedia:** Prende quei nomi e va nel DB (o in `src.database`) a recuperare il `CREATE TABLE` completo **solo** per quelle 2 tabelle.
+3. **Agente 3:** Riceve in input:
+* La domanda utente.
+* Il `reasoning` dell'Agente 2 (usalo come "suggerimento" o "piano d'azione").
+* **Il DDL delle tabelle scelte** (questo è obbligatorio).
+
+
+
+### Come modificare il Grafo (`graph.py`)
+
+Dovresti aggiungere un nodo intermedio o includere la logica nel nodo SQL Generator. Ti consiglio di strutturarlo così:
+
+```python
+# ... import vari ...
+
+# NODO 3: SQL GENERATOR
+async def run_sql_generator(state: AgentState):
+    print("✍️ (SQL Generator) Generazione query...")
+    
+    # 1. Recuperiamo i nomi scelti dall'Agente 2
+    table_names = state["selected_tables"]
+    
+    # 2. RECUPERO DDL (Passaggio FONDAMENTALE mancante nella tua ipotesi)
+    # Usiamo una funzione del tuo DatabaseManager per avere lo schema pulito
+    db_manager = DatabaseManager(state["db_path"])
+    ddl_context = ""
+    for table in table_names:
+        ddl_context += db_manager.get_table_ddl(table) + "\n"
+        
+    # 3. Prompt per SQL Generator
+    # Qui gli passiamo ANCHE il reasoning dell'agente precedente.
+    # Perché? Perché l'Agente 2 ha già capito i JOIN (vedi il tuo log).
+    # Aiuta l'Agente 3 a non "ripensare" tutto da capo.
+    
+    last_message = state["messages"][-1] # Contiene il reasoning dell'Agente 2
+    
+    prompt = f"""
+    Sei un esperto SQL. Scrivi la query per rispondere alla domanda.
+    
+    SCHEMA DISPONIBILE:
+    {ddl_context}
+    
+    PIANO SUGGERITO (Dall'analista):
+    {last_message.content}
+    
+    DOMANDA UTENTE: {state['user_query']}
+    
+    Restituisci solo il codice SQL.
+    """
+    
+    # ... chiamata LLM ...
+    # return {"generated_sql": ...}
+
+# ... Costruzione Grafo ...
+workflow.add_node("entity_extractor", run_entity_extractor)
+workflow.add_node("table_selector", run_table_selector)
+workflow.add_node("sql_generator", run_sql_generator) # <--- Nuovo nodo
+
+workflow.add_edge("entity_extractor", "table_selector")
+workflow.add_edge("table_selector", "sql_generator") # <--- Connessione
+workflow.add_edge("sql_generator", END)
+
+```
+
+### Sintesi per Qwen 32B
+
+Con Qwen 32B sul cluster:
+
+1. Il **Reasoning** sarà ancora più intelligente di Llama.
+2. Mantienilo: è la tua "assicurazione" che le tabelle scelte siano giuste.
+3. Passalo all'Agente SQL come "Plan/Hint".
+4. **Ricordati di recuperare il DDL** dei nomi selezionati prima di chiamare l'Agente SQL, altrimenti lui è cieco sulla struttura delle colonne.
+
+
+
+===========DOMANDA 2===================
+Quindi all'agente 3 prima di scrivere l'sql gli dovrei aggiungere il tool agent "get_schema_tool":
+
+from pydantic import Field
+from pydantic_ai import Agent, RunContext
+from .models import SchemaDeps, TableSelectionResult
+from .config import get_model
+
+# ---------------------------------------------------------
+# DEFINIZIONE TOOL
+# ---------------------------------------------------------
+
+async def list_tables_tool(ctx: RunContext[SchemaDeps], search_filter: str = "") -> list[str]:
+    """Restituisce i nomi delle tabelle presenti nel database. 
+    
+    Questo tool scopre i nomi delle tabelle presenti nel database.
+    
+    Args: (Opzionale)
+        search_filter
+    : La radice di una parola chiave presa dalla richiesta dell'utente.
+            Ad esempio data la parola chiave 'vincoli' usa 'vinc'.
+            Lascialo vuoto per vedere TUTTE le tabelle.
+    
+    Returns:
+        Una lista di nomi di tabelle che corrispondono al filtro.
+    """
+    # Il filtro aiuta a ridurre il context bloat su DB grandi.
+    return ctx.deps.db_manager.search_tables(search_filter
+ or None)
+
+async def get_schema_tool(ctx: RunContext[SchemaDeps], table_name: str) -> str:
+    """Restituisce la struttura completa (DDL) di una tabella specifica.
+    
+    Questo tool scopre i nomi delle colonne e le relazioni (Foreign Keys) di una tabella.
+    
+    Args:
+        table_name: Il nome esatto della tabella da ispezionare.
+        
+    Returns:
+        Una stringa contenente lo statement CREATE TABLE con colonne e tipi.
+        Esempio: "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT...)"
+    """
+    return ctx.deps.db_manager.get_table_ddl(table_name)
+
+# ---------------------------------------------------------
+# SYSTEM PROMPT (Best Practice: Describe Actions, Not Implementations)
+# ---------------------------------------------------------
+
+SYSTEM_PROMPT = """
+Sei un Data Engineer specializzato in Schema Linking.
+Il tuo compito è identificare le tabelle SQL rilevanti per la richiesta dell'utente.
+
+PROTOCOLLO OPERATIVO (Segui in ordine):
+1. **Mappa**: Usa obbligatoriamente per primo e SOLO UNA VOLTA `list_tables_tool` per vedere quali tabelle esistono.
+1.1 **Recovery**: Se con il filtro restituisce una lista vuota `[]`, DEVI richiamare `list_tables_tool` SENZA filtro per vedere tutto il database. Non arrenderti mai al primo tentativo vuoto.
+2. **Ispezione**: Non ti fidare dei nomi delle tabelle, SOLO DOPO aver usato `list_tables_tool`, usa `get_schema_tool` con i nomi ottenuti , per leggere le colonne delle tabelle che ritieni utili (ottenute da list_tables_tool) e capire se lo sono effettivamente.
+Tieni in considerazione le Foreign Key: quelle tabelle sono da includere.
+3. **Output**: Restituisci SOLO l'oggetto JSON finale.
+
+ESEMPIO DI FORMATO (Devi rispondere SOLO così):
+{
+  "reasoning": "Ho controllato 'esempioNomeTabella' e 'esempioNomeTabella1'. Seleziono entrambe perché contengono idTabella0 e idTabella1 .",
+  "relevant_tables": ["esempioNomeTabella", "esempioNomeTabella1"],
+  "is_ambiguous": false
+}
+
+REGOLE IMPORTANTI:
+- USA OBBLIGATORIAMENTE UN TOOL PER VOLTA.
+- NON scrivere frasi discorsive prima o dopo il JSON.
+- NON scrivere codice SQL.
+- NON inventare nomi di tabelle e colonne.
+- NON usare termini inglesi se l'utente ha scritto in italiano.
+"""
+
+# Configurazione Agente
+schema_agent = Agent[SchemaDeps, TableSelectionResult](
+    model=get_model(),
+    system_prompt=SYSTEM_PROMPT,
+    retries=3
+)
+
+# Registrazione Tool
+schema_agent.tool(list_tables_tool)
+schema_agent.tool(get_schema_tool)
+
+================RISPOSTA 2==================
+La risposta breve è: **No, non farlo. Sarebbe un errore architettonico.**
+
+Se dai quei tool all'Agente 3, lo trasformi in un "Agente 2 bis". Noterai infatti che il codice che hai incollato ha come output `TableSelectionResult` (selezione tabelle), non codice SQL.
+
+### Perché è sbagliato dare i tool all'Agente 3?
+
+L'Agente 2 ha **già deciso** quali tabelle servono (`selected_tables`).
+Se all'Agente 3 dai il tool `get_schema_tool`, lo costringi a fare questo giro inutile:
+
+1. Riceve i nomi delle tabelle.
+2. L'LLM deve "pensare": *"Ah, devo chiamare il tool per avere lo schema"*.
+3. Ferma l'esecuzione -> Chiama Python -> Rientra nell'LLM.
+4. Scrive l'SQL.
+
+È lento e spreca token.
+
+### La Soluzione Migliore: "Context Injection"
+
+Dato che i nomi delle tabelle li hai già (nello `state['selected_tables']`), puoi recuperare il DDL (lo schema) **direttamente via codice Python** dentro il nodo del grafo, *prima* di chiamare l'LLM.
+
+L'Agente 3 deve trovare la "pappa pronta": lo schema deve essere già nel suo prompt.
+
+Ecco come scrivere il nodo **SQL Generator** in modo efficiente nel tuo file `agent.py` (o dove definisci i nodi), usando il `DatabaseManager` direttamente senza passare per i tool dell'LLM.
+
+```python
+# In agent.py
+
+from langchain_core.prompts import ChatPromptTemplate
+from src.database import DatabaseManager 
+from src.models import AgentState
+
+# ... configurazione llm ...
+
+async def run_sql_generator(state: AgentState):
+    print("✍️ (SQL Generator) Preparazione contesto e generazione query...")
+    
+    # 1. Recupera i nomi delle tabelle decise dall'Agente 2
+    selected_tables = state.get("selected_tables", [])
+    
+    if not selected_tables:
+        return {"error": "Nessuna tabella selezionata dall'Agente 2."}
+
+    # 2. CONTEXT INJECTION (Il trucco per evitare i tool)
+    # Usiamo la classe Python direttamente per estrarre il testo DDL.
+    # Non serve che l'LLM "decida" di farlo, lo facciamo noi per lui.
+    db_manager = DatabaseManager(state["db_path"])
+    ddl_context = ""
+    
+    try:
+        for table in selected_tables:
+            # Recupera il CREATE TABLE per ogni tabella scelta
+            ddl = db_manager.get_table_ddl(table)
+            ddl_context += f"-- Schema per {table}:\n{ddl}\n\n"
+    except Exception as e:
+        return {"error": f"Errore nel recupero DDL: {str(e)}"}
+
+    # 3. Costruzione del Prompt per l'SQL Generator
+    # Gli diamo tutto: DDL preciso, Ragionamento precedente, Domanda.
+    
+    # Recuperiamo il ragionamento dell'Agente 2 (l'ultimo messaggio)
+    last_reasoning = state["messages"][-1].content if state["messages"] else "Nessun ragionamento disponibile."
+
+    generator_prompt = """
+    Sei un esperto sviluppatore SQL (Dialetto SQLite).
+    Il tuo compito è scrivere una query SQL corretta ed efficiente per rispondere alla domanda dell'utente.
+    
+    ### SCHEMA DEL DATABASE (DDL)
+    Qui trovi la struttura ESATTA delle tabelle da usare:
+    {ddl_context}
+    
+    ### ANALISI PRELIMINARE (Dal Data Engineer)
+    Segui questo piano logico per i JOIN e i filtri:
+    {reasoning}
+    
+    ### DOMANDA UTENTE
+    {query}
+    
+    ### REGOLE
+    1. Restituisci SOLO il codice SQL puro.
+    2. Non mettere markdown (```sql).
+    3. Usa i nomi delle colonne ESATTI forniti nel DDL qui sopra.
+    4. Se serve un JOIN, controlla bene le Foreign Key nel DDL.
+    """
+    
+    prompt_template = ChatPromptTemplate.from_template(generator_prompt)
+    chain = prompt_template | llm
+    
+    # 4. Generazione
+    print(f"   Generazione SQL su {len(selected_tables)} tabelle...")
+    response = await chain.ainvoke({
+        "ddl_context": ddl_context,
+        "reasoning": last_reasoning,
+        "query": state["user_query"]
+    })
+    
+    generated_sql = response.content.strip()
+    
+    # Pulizia eventuale markdown (se l'LLM disubbidisce)
+    generated_sql = generated_sql.replace("```sql", "").replace("```", "").strip()
+    
+    return {
+        "generated_sql": generated_sql,
+        "messages": [f"SQL Generato:\n{generated_sql}"]
+    }
+
+```
+
+### Perché questa soluzione è superiore?
+
+1. **Deterministica:** Non rischi che l'Agente 3 "decida" di non guardare lo schema. Glielo sbatti in faccia nel prompt.
+2. **Veloce:** Risparmi 1 round-trip di chiamata tool.
+3. **Pulita:** L'Agente 3 fa una cosa sola: Traduzione da (Testo + Schema) -> SQL.
+
+### Quando servirebbero i tool all'Agente 3?
+
+L'unico caso in cui daresti i tool all'Agente 3 è se volessi implementare un meccanismo di **Self-Correction (Auto-guarigione)**:
+
+* L'Agente 3 scrive la query.
+* Provi a eseguirla -> Errore "Colonna non trovata".
+* L'Agente 3 riceve l'errore e allora *lì* potrebbe usare un tool `list_columns` per capire come si chiama davvero la colonna.
+
+Ma per ora, nel flusso "Standard", l'approccio **Inject DDL via Python** è la best practice assoluta.
+
+
+=================DOMANDA 3=====================
+Il self-correction lo implementerò successivamente, potenzialmente con un quarto agente che usa un altro LLM, in modo da garantire un cambio di ragionamento. 
+Inject DDL me lo hai scritto nella nuova graph.py?
+# ... import vari ...
+
+# NODO 3: SQL GENERATOR
+async def run_sql_generator(state: AgentState):
+    print("✍️ (SQL Generator) Generazione query...")
+    
+    # 1. Recuperiamo i nomi scelti dall'Agente 2
+    table_names = state["selected_tables"]
+    
+    # 2. RECUPERO DDL (Passaggio FONDAMENTALE mancante nella tua ipotesi)
+    # Usiamo una funzione del tuo DatabaseManager per avere lo schema pulito
+    db_manager = DatabaseManager(state["db_path"])
+    ddl_context = ""
+    for table in table_names:
+        ddl_context += db_manager.get_table_ddl(table) + "\n"
+        
+    # 3. Prompt per SQL Generator
+    # Qui gli passiamo ANCHE il reasoning dell'agente precedente.
+    # Perché? Perché l'Agente 2 ha già capito i JOIN (vedi il tuo log).
+    # Aiuta l'Agente 3 a non "ripensare" tutto da capo.
+    
+    last_message = state["messages"][-1] # Contiene il reasoning dell'Agente 2
+    
+    prompt = f"""
+    Sei un esperto SQL. Scrivi la query per rispondere alla domanda.
+    
+    SCHEMA DISPONIBILE:
+    {ddl_context}
+    
+    PIANO SUGGERITO (Dall'analista):
+    {last_message.content}
+    
+    DOMANDA UTENTE: {state['user_query']}
+    
+    Restituisci solo il codice SQL.
+    """
+    
+    # ... chiamata LLM ...
+    # return {"generated_sql": ...}
+
+# ... Costruzione Grafo ...
+workflow.add_node("entity_extractor", run_entity_extractor)
+workflow.add_node("table_selector", run_table_selector)
+workflow.add_node("sql_generator", run_sql_generator) # <--- Nuovo nodo
+
+workflow.add_edge("entity_extractor", "table_selector")
+workflow.add_edge("table_selector", "sql_generator") # <--- Connessione
+workflow.add_edge("sql_generator", END)
+
+=====================RISPOSTA 3=====================
+Esatto! Hai capito perfettamente il meccanismo.
+
+Separare la **logica** (nel file `agent.py`) dalla **definizione del flusso** (nel file `graph.py`) è la pratica migliore per mantenere il codice pulito.
+
+Ecco il codice completo e pronto per essere incollato nei tuoi file. Ho affinato il prompt dell'Agente 3 per sfruttare al massimo il reasoning dell'Agente 2.
+
+### 1. File `src/models.py`
+
+Assicurati che il tuo `AgentState` abbia il campo per ospitare l'SQL generato (se non l'hai già aggiunto).
+
+```python
+from typing import TypedDict, List, Optional, Any
+from langchain_core.messages import BaseMessage
+
+# Aggiungi 'generated_sql' al tuo TypedDict esistente
+class AgentState(TypedDict):
+    messages: List[BaseMessage]
+    user_query: str
+    db_path: str
+    extraction_result: Optional[Any]      # Output Agente 1
+    selected_tables: List[str]            # Output Agente 2
+    candidate_tables_schema: Optional[str] # Output Vector Store
+    generated_sql: Optional[str]          # <--- NUOVO: Output Agente 3
+    error: Optional[str]
+
+```
+
+---
+
+### 2. File `src/agent.py`
+
+Qui mettiamo la logica del nuovo nodo "Inject DDL + Generate SQL".
+
+```python
+import json
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from src.config import BASE_URL, API_KEY, LLM_MODEL_NAME
+from src.models import AgentState, ExtractionResult, TableSelectionResult
+from src.database import DatabaseManager 
+from src.tools import search_schema_tool
+
+# --- CONFIGURAZIONE LLM ---
+llm = ChatOpenAI(
+    model=LLM_MODEL_NAME,
+    openai_api_base=BASE_URL,
+    openai_api_key=API_KEY,
+    temperature=0
+)
+
+# ... (Qui sopra ci sono le funzioni run_entity_extractor e run_table_selector che hai già) ...
+
+# ---------------------------------------------------------
+# NODO 3: SQL GENERATOR (Con DDL Injection)
+# ---------------------------------------------------------
+async def run_sql_generator(state: AgentState):
+    print("✍️ (SQL Generator) Recupero DDL e generazione query...")
+    
+    # 1. Recupera tabelle selezionate
+    selected_tables = state.get("selected_tables", [])
+    if not selected_tables:
+        return {"error": "Agente 2 non ha selezionato nessuna tabella."}
+
+    # 2. INJECT DDL (Recupero schema puntuale via Python)
+    try:
+        db_manager = DatabaseManager(state["db_path"])
+        ddl_context = ""
+        for table in selected_tables:
+            # Recupera il CREATE TABLE pulito
+            ddl = db_manager.get_table_ddl(table)
+            ddl_context += f"-- Tabella: {table}\n{ddl}\n\n"
+    except Exception as e:
+        return {"error": f"Errore nel recupero DDL dal DB: {str(e)}"}
+
+    # 3. Costruzione Prompt
+    # Recuperiamo l'ultimo messaggio che contiene il ragionamento dell'Agente 2
+    # (assumiamo sia l'ultimo aggiunto alla lista messages)
+    last_message = state["messages"][-1]
+    reasoning_context = last_message if isinstance(last_message, str) else last_message.content
+
+    generator_prompt = """
+    Sei un esperto sviluppatore SQL per database SQLite.
+    Il tuo compito è convertire una richiesta in linguaggio naturale in una query SQL precisa ed eseguibile.
+
+    ### 1. SCHEMA DEL DATABASE (DDL ESATTO)
+    Usa SOLO le tabelle e le colonne definite qui sotto:
+    {ddl_context}
+
+    ### 2. PIANO LOGICO SUGGERITO (Dal Data Analyst)
+    Segui questo ragionamento per JOIN e filtri:
+    {reasoning}
+
+    ### 3. RICHIESTA UTENTE
+    {query}
+
+    ### REGOLE OBBLIGATORIE:
+    - Restituisci SOLO il codice SQL puro (niente markdown ```sql, niente spiegazioni).
+    - Usa sintassi compatibile con SQLite.
+    - Se usi JOIN, assicurati che le colonne esistano nel DDL fornito.
+    """
+
+    prompt_template = ChatPromptTemplate.from_template(generator_prompt)
+    chain = prompt_template | llm
+
+    try:
+        # 4. Invocazione LLM
+        response = await chain.ainvoke({
+            "ddl_context": ddl_context,
+            "reasoning": reasoning_context,
+            "query": state["user_query"]
+        })
+        
+        raw_sql = response.content.strip()
+        
+        # Pulizia base (rimozione markdown se presente)
+        clean_sql = raw_sql.replace("```sql", "").replace("```", "").strip()
+        
+        return {
+            "generated_sql": clean_sql,
+            "messages": [f"SQL Generato:\n{clean_sql}"]
+        }
+        
+    except Exception as e:
+        return {"error": f"Errore generazione SQL: {str(e)}"}
+
+```
+
+---
+
+### 3. File `src/graph.py`
+
+Qui colleghi i cavi. Nota come il flusso ora è completo: Extractor -> Selector -> Generator.
+
+```python
+from langgraph.graph import StateGraph, END
+from src.models import AgentState
+
+# Importiamo le funzioni dai nodi definiti in agent.py
+from src.agent import run_entity_extractor, run_table_selector, run_sql_generator
+
+# Costruzione del grafo
+workflow = StateGraph(AgentState)
+
+# 1. Aggiungi i nodi
+workflow.add_node("entity_extractor", run_entity_extractor)
+workflow.add_node("table_selector", run_table_selector)
+workflow.add_node("sql_generator", run_sql_generator) # <--- Il nuovo nodo
+
+# 2. Definisci i collegamenti (Edges)
+workflow.set_entry_point("entity_extractor")
+
+workflow.add_edge("entity_extractor", "table_selector")
+workflow.add_edge("table_selector", "sql_generator") # Passa il testimone al generatore
+workflow.add_edge("sql_generator", END)              # Fine (per ora)
+
+# Compilazione
+app = workflow.compile()
+
+```
+
+### Prossimi Passi (Anteprima per il futuro)
+
+Quando sarai pronto per il "Quarto Agente" (Self-Correction), ti basterà cambiare l'ultima riga di `graph.py`:
+
+Invece di:
+`workflow.add_edge("sql_generator", END)`
+
+Metterai un **Conditional Edge**:
+
+1. Esegui la query (Tool Python).
+2. Se `Successo` -> END.
+3. Se `Errore` -> Vai a nodo `error_corrector` (che userà un altro LLM).
+
+Ma per ora, con questi 3 nodi, hai già un sistema Text-to-SQL molto più potente della media! 🚀

@@ -25,7 +25,7 @@ scp /percorso/locale/nomefileSQLite.db leonardo.vincenzi@giano.cs.unibo.it:/scra
 scp C:\Users\lvincenzi\Tesi\mas_text2sql\cluster\run_agent.sbatch leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/
 OPPURE
 #caricare con scp l'intera cartella del progetto - TERMINALE PC AZIENDALE
-scp -r C:\Users\lvincenzi\Tesi\mas_text2sql leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/
+scp -r C:\Users\lvincenzi\mas_text2sql\src leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/mas_text2sql
 "C:\Users\lvincenzi\Tesi\mas_text2sql"
 scp -r /Users/leonardovincenzi/Desktop/mas_text2sql leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/
 
