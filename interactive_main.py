@@ -3,7 +3,6 @@ import asyncio
 import os
 import sys
 from langchain_core.messages import HumanMessage
-from src.graph import app
 
 # Configurazione default (fallback se non passato da argomenti)
 DEFAULT_DB_PATH = "cloneDefinitivoDB.db" 
@@ -25,6 +24,8 @@ async def main():
     # Fondamentale per far trovare il DB vettoriale a tools.py
     if chroma_path:
         os.environ["CHROMA_PATH"] = chroma_path
+
+    from src.graph import app  # ✅ import qui
 
     # --- 1. Verifica preliminare ---
     if not os.path.exists(db_path):

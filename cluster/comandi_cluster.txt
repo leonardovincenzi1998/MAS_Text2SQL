@@ -25,8 +25,10 @@ scp /percorso/locale/nomefileSQLite.db leonardo.vincenzi@giano.cs.unibo.it:/scra
 scp C:\Users\lvincenzi\Tesi\mas_text2sql\cluster\run_agent.sbatch leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/
 OPPURE
 #caricare con scp l'intera cartella del progetto - TERMINALE PC AZIENDALE
-scp -r /percorso/locale/progetto leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/
+scp -r C:\Users\lvincenzi\Tesi\mas_text2sql leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/
 "C:\Users\lvincenzi\Tesi\mas_text2sql"
+scp -r /Users/leonardovincenzi/Desktop/mas_text2sql leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/
+
 
 #scaricare file da cluster a locale
 scp leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/mas_text2sql/agent_log_22489.txt .
@@ -40,7 +42,7 @@ huggingface-cli login # (Se serve)
 huggingface-cli download Qwen/Qwen2.5-32B-Instruct-AWQ
 
 #Necessario per file importati da windows su linux
-sed -i 's/\r$//' run_agent.sbatch
+sed -i 's/\r$//' cluster/start_session.sh
 
 #Da Giano, lancia il job:
 sbatch run_agent.sbatch
@@ -64,8 +66,11 @@ srun --nodes=1 --ntasks=1 --cpus-per-task=8 --gres=gpu:1 --mem=58G --partition=l
 #una volta dentro il nodo
 
 cd /scratch.hpc/leonardo.vincenzi/mas_text2sql
-chmod +x start_session.sh
-./start_session.sh
+chmod +x cluster/start_session.sh
+./cluster/start_session.sh
 
 exit #per uscire dalla sessione delle domande
 exit #per uscire dal nodo con la sessione attiva
+
+#previsione partenza job scheduler se in attesa di risorse
+squeue --job 22609 --start

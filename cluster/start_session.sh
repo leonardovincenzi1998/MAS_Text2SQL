@@ -15,10 +15,10 @@ fi
 # ==============================================================================
 
 # --- 1. SETUP AMBIENTE (Identico al .sbatch) ---
-echo "🔧 Caricamento Moduli..."
-module purge
-module load cuda
-module load gcc
+#echo "🔧 Caricamento Moduli..."
+#module purge
+#module load cuda
+#module load gcc
 
 # Configurazione Path
 export SCRATCH_DIR="/scratch.hpc/leonardo.vincenzi"
@@ -36,7 +36,7 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export XDG_CACHE_HOME="$SCRATCH_DIR/.cache"
 mkdir -p $XDG_CACHE_HOME
-
+export VLLM_USE_UVLOOP=0
 # In interattivo, di solito NON vogliamo ricreare il DB ogni volta per fare prima.
 # Se serve forzarlo, cambia in "true" o cancella la cartella chroma_db_data a mano.
 export FORCE_REINGEST="false" 
@@ -60,7 +60,7 @@ else
         --dtype auto \
         --api-key EMPTY \
         --port 8000 \
-        --gpu-memory-utilization 0.95 \
+        --gpu-memory-utilization 0.75 \
         --max-model-len 32768 \
         --disable-log-requests > vllm_server.log 2>&1 &
     

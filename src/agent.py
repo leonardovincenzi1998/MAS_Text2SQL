@@ -20,36 +20,30 @@ llm = ChatOpenAI(
 # ---------------------------------------------------------
 # 2. PROMPT (La tua logica originale, adattata)
 # ---------------------------------------------------------
-# Ho mantenuto il tuo prompt eccellente, ma ho rimosso la parte 
-# "Output Format" rigida perché ci penserà with_structured_output a forzarla.
-
 ENTITY_EXTRACTOR_SYSTEM_PROMPT = """
-Role:
-You are a Query Understanding & Information Retrieval Expert.
-You specialize in analyzing user questions to extract meaningful information for retrieval systems.
+Ruolo:
+Sei un esperto di comprensione delle query e recupero delle informazioni.
+Sei specializzato nell'analisi delle domande degli utenti per estrarre informazioni significative per i sistemi di retrieval.
+Il tuo obiettivo:
+Identificare le componenti chiave da recuperare dalla domanda di un utente, compreso l'intento, le entità importanti e le operazioni rilevanti.
+Il tuo compito:
+1. **Rilevamento dell'intento**: determinare ciò che l'utente sta realmente chiedendo. Riassumerlo in una frase concisa.
+2. **Estrazione delle parole chiave**: identificare parole chiave o frasi importanti. Trattare le entità denominate composte da più parole come singole parole chiave.
+3. **Classificazione delle parole chiave**:
+   - **Entità**: elementi tangibili, oggetti aziendali, nomi di tabelle, valori specifici.
+   - **Operazioni**: parole analitiche (media, massimo, conteggio, maggiore di).
+Modalità di ragionamento:
+Pensa passo dopo passo. Concentrati sulla logica aziendale e sui requisiti di recupero dei dati.
 
-Your Goal:
-Identify key retrieval points from a user's question, including the underlying intent, important entities, and relevant operations.
+#####ESEMPI#####
+Input: ‘Voglio che raggruppi tutti i vincoli che ci sono per ogni fabbricato’
+Output: Intent="Raggruppare i vincoli per ogni fabbricato", Entità=["Vincoli", "Fabbricati"], Operazioni=["Group"]
 
-Your Task:
-1. **Intent Detection**: Determine what the user is truly asking for. Summarize it in a concise sentence.
-2. **Keyword Extraction**: Identify important keywords or phrases. Treat multi-word named entities as single keywords.
-3. **Keyword Classification**:
-   - **Entities**: tangible items, business objects, table names, specific values.
-   - **Operations**: analytical words (average, highest, count, greater than).
-
-Reasoning Mode:
-Think step-by-step. Focus on business logic and data retrieval requirements.
-
-#####EXAMPLES#####
-Input: "Group vincoli for each fabbricato"
-Output: Intent="Raggruppare i vincoli per ogni fabbricato", Entities=["Vincoli", "Fabbricati"], Operations=["Group"]
-
-Input: "Calculate average surface of Terreni"
-Output: Intent="Calcolare media superficie terreni", Entities=["Terreni", "Superficie"], Operations=["Average"]
+Input: "Voglio che calcoli la media della superficie dei terreni"
+Output: Intent="Calcolare media superficie terreni", Entità=["Terreni", "Superficie"], Operazioni=["Average"]
 
 Input: "Quanti vincoli ci sono?"
-Output: Intent="Conteggio vincoli", Entities=["Vincoli"], Operations=["Conta"]
+Output: Intent="Conteggio vincoli", Entità=["Vincoli"], Operazioni=["Conta"]
 """
 
 # ---------------------------------------------------------
@@ -58,232 +52,98 @@ Output: Intent="Conteggio vincoli", Entities=["Vincoli"], Operations=["Conta"]
 
 async def run_entity_extractor(state: AgentState):
     """
-    NODO 1: Analizza la query utente usando il tuo Prompt specializzato.
+    NODO 1: Nessuna modifica sostanziale necessaria, è ben fatto.
     """
-    print(f"   🕵️‍♀️ (Entity Extractor) Analisi query: '{state['user_query']}'")
+    print(f"🕵️‍♀️ (Entity Extractor) Analisi query: '{state['user_query']}'")
     
-    # Creiamo il template usando il TUO prompt
     prompt = ChatPromptTemplate.from_messages([
         ("system", ENTITY_EXTRACTOR_SYSTEM_PROMPT),
         ("human", "{input}")
     ])
     
-    # Usiamo with_structured_output per forzare il modello a rispondere ESATTAMENTE
-    # come definito nella classe ExtractionResult (in models.py).
-    # Questo sostituisce la necessità di parsare manualmente il JSON.
     structured_llm = llm.with_structured_output(ExtractionResult)
     chain = prompt | structured_llm
     
     try:
-        # Usiamo ainvoke (asincrono) per performance migliori
         extraction = await chain.ainvoke({"input": state['user_query']})
-        
-        # Restituiamo l'aggiornamento dello stato
         return {
             "extraction_result": extraction,
-            # Aggiungiamo un messaggio alla storia per debug
-            "messages": [f"Entità estratte: {extraction.entities}"]
+            "messages": [f"Entità: {extraction.entities} | Intento: {extraction.intent}"]
         }
     except Exception as e:
-        return {"error": f"Errore in Entity Extractor: {str(e)}"}
+        return {"error": f"Errore Extractor: {str(e)}"}
 
 
 async def run_table_selector(state: AgentState):
     """
-    NODO 2: 
-    1. Cerca tabelle simili in ChromaDB usando le keyword estratte dal Nodo 1.
-    2. Usa l'LLM per filtrare e selezionare solo quelle utili.
+    NODO 2: Ottimizzato per ricerca vettoriale pulita e gestione dipendenze.
     """
-    print("🔍 (Table Selector) Ricerca tabelle nel Vector Store...")
+    print("🔍 (Table Selector) Ricerca tabelle...")
     
     extraction = state.get("extraction_result")
     
-    # Fallback se l'estrazione è fallita
-    if extraction:
-        search_query = f"{extraction.intent} " + " ".join(extraction.entities)
+    # --- MIGLIORIA 1: Query Pulita per Chroma ---
+    # Usiamo SOLO le entità per la ricerca vettoriale. 
+    # Le parole come "Media", "Conta", "Raggruppa" confondono il vector store.
+    if extraction and extraction.entities:
+        # Uniamo le entità. Es: "Fabbricati Vincoli"
+        vector_search_query = " ".join(extraction.entities)
+        print(f"   Testo usato per Chroma: '{vector_search_query}'")
     else:
-        search_query = state["user_query"]
+        # Fallback sulla query intera se non ci sono entità
+        vector_search_query = state["user_query"]
 
-    # --- A. CHIAMATA AL TOOL (ChromaDB) ---
+    # --- A. RETRIEVAL (Tool) ---
     try:
-        # search_schema_tool.invoke è sincrono, ma va bene qui.
-        # Restituisce una stringa JSON con le tabelle candidate.
-        schema_json = search_schema_tool.invoke({"query": search_query, "k": 15})
+        # Recuperiamo un numero generoso di tabelle (es. 10-15) per avere contesto
+        schema_json = search_schema_tool.invoke({"query": vector_search_query, "k": 10})
     except Exception as e:
-        return {"error": f"Errore nel recupero schema da Chroma: {str(e)}"}
+        return {"error": f"Errore Chroma: {str(e)}"}
     
-    # --- B. RAGIONAMENTO LLM ---
-    print("   🧠 (Table Selector) Ragionamento sulle tabelle trovate...")
+    # --- B. SELECTION (LLM) ---
+    print("🧠 (Table Selector) Filtering intelligente...")
     
     selector_prompt = """
-    Sei un Data Engineer esperto. 
-    Il tuo obiettivo è selezionare SOLO le tabelle SQL strettamente necessarie per rispondere alla domanda dell'utente.
+    Sei un Senior Data Architect specializzato in SQL.
     
-    Hai a disposizione un sottoinsieme dello schema del database (in formato JSON) recuperato tramite ricerca semantica.
+    OBIETTIVO:
+    Selezionare il sottoinsieme minimo di tabelle necessario per rispondere alla domanda dell'utente.
     
-    SCHEMA TROVATO:
+    INPUT:
+    1. DOMANDA: "{query}"
+    2. INTENTO RILEVATO: "{intent}"
+    3. TABELLE CANDIDATE (recuperate via ricerca semantica):
     {schema}
     
-    DOMANDA UTENTE: {query}
-    INTENTO ESTRATTO: {intent}
+    ISTRUZIONI CRITICHE:
+    1. **Analisi Semantica**: Usa le descrizioni delle tabelle per capire se contengono i dati richiesti.
+    2. **Analisi Relazionale (Join)**: Se selezioni una tabella che usa una Foreign Key (es. `client_id`) per collegarsi a un concetto citato nella domanda (es. "Nome Cliente"), DEVI selezionare anche la tabella riferita se è presente nella lista.
+    3. **Scarta il Rumore**: Se una tabella è stata recuperata ma non c'entra nulla con l'intento (es. tabella 'Log' per una domanda di vendita), scartala.
     
-    Analizza la struttura delle tabelle fornite e restituisci la selezione finale.
-
-    ATTENZIONE: Controlla SEMPRE le Foreign Key. Se vedi ad esempio un IdLocale, cerca se esiste la tabella Locali nella lista fornita.
+    OUTPUT:
+    Restituisci la lista delle tabelle scelte e una breve spiegazione del perché (es. "Scelgo `Orders` per gli importi e `Customers` per filtrare per nome").
     """
     
     prompt = ChatPromptTemplate.from_template(selector_prompt)
     structured_llm = llm.with_structured_output(TableSelectionResult)
     chain = prompt | structured_llm
     
-####################################
-    # user_prompt_context = f"""
-    # ANALIZZA I SEGUENTI DATI E SELEZIONA LE TABELLE.
-
-    # SCHEMA TROVATO (JSON):
-    # {schema_json}
-    
-    # DOMANDA UTENTE: {state['user_query']}
-    # INTENTO ESTRATTO: {extraction.intent if extraction else "Generico"}
-    # """
-    
-    # # --- 🕵️‍♀️ LA SPIA ---
-    # print("\n" + "="*30)
-    # print("📝 COSA STO INVIANDO ALL'AGENTE 2:")
-    # print(user_prompt_context) # <--- Stampa tutto il contesto
-    # print("="*30 + "\n")
-    # # ------------------
-####################################
-
     try:
-        # Eseguiamo la catena passando tutti i dati necessari
-        result: TableSelectionResult = await chain.ainvoke({
+        result = await chain.ainvoke({
             "schema": schema_json,
             "query": state["user_query"],
+            # Passiamo l'intento all'LLM per aiutarlo a filtrare, non a Chroma!
             "intent": extraction.intent if extraction else "Generico"
         })
         
-        # --- COSTRUZIONE DEL LOG RICCO ---
-        # Qui formattiamo il messaggio che vedrai stampato nel main.py
-        log_message = (
-            f"✅ SELEZIONE COMPLETATA.\n"
-            f"🧠 RAGIONAMENTO: {result.reasoning}\n" 
-            f"📂 TABELLE: {result.relevant_tables}"
-        )
-
+        # Loggare il ragionamento è fondamentale per il debug
+        log_msg = f"✅ Tabelle Selezionate: {result.relevant_tables}\n🤔 Ragionamento: {result.reasoning}"
+        
         return {
             "selected_tables": result.relevant_tables,
-            "candidate_tables_schema": schema_json, 
-            "messages": [log_message] # <--- Ora il main.py stamperà anche il ragionamento!
+            "candidate_tables_schema": schema_json, # Utile tenerlo nello stato per debug
+            "messages": [log_msg]
         }
         
     except Exception as e:
-         return {"error": f"Errore nell'LLM Selector: {str(e)}"}
-
-    # try:
-    #     result: TableSelectionResult = await chain.ainvoke({
-    #         "schema": schema_json,
-    #         "query": state["user_query"],
-    #         "intent": extraction.intent if extraction else "Generico"
-    #     })
-        
-    #     return {
-    #         "selected_tables": result.relevant_tables,
-    #         "candidate_tables_schema": schema_json, 
-    #         "messages": [f"Tabelle selezionate: {result.relevant_tables}"]
-    #     }
-    # except Exception as e:
-    #      return {"error": f"Errore nell'LLM Selector: {str(e)}"}
-    
-
-
-
-
-
-
-
-#     from pydantic_ai import Agent, RunContext
-# from .models import SchemaDeps, ExtractionResult
-# from .config import get_model
-
-# # ---------------------------------------------------------
-# # SYSTEM PROMPT (Basato su 'Entity Extraction Agent' - Appendix I)
-# # ---------------------------------------------------------
-
-# ENTITY_EXTRACTOR_SYSTEM_PROMPT = """
-# Role:
-# You are a Query Understanding & Information Retrieval Expert that only outputs valid JSON.
-# You specialize in analyzing user questions to extract meaningful information for retrieval systems.
-
-# Your Goal:
-# Identify key retrieval points from a user's question, including the underlying intent, important entities, and relevant operations.
-
-# Your Task:
-# 1. **Intent Detection** (information retrieval focus): Determine what the user is truly asking for. Summarize it in a concise sentence.
-# 2. **Keyword Extraction** (linguistic and domain focus): Identify important keywords or phrases from the question.
-#    - Treat multi-word named entities (e.g., product names, department titles) and specific values (e.g., dates, codes) as single keywords.
-# 3. **Keyword Classification**: Classify extracted keywords into:
-#    - **Entities**: tangible or named items such as business objects, metrics, categories, table names, or specific data values.
-#    - **Operations**: words or phrases describing analytical, comparison, aggregation, ordering, or logical relationships (e.g., "average", "highest", "greater than", "count").
-
-# Reasoning Mode:
-# Think step-by-step, combining linguistic and analytical logic. Focus on business logic and data retrieval requirements.
-
-# Output Format:
-# You must return a valid JSON object matching the ExtractionResult structure:
-# {
-#   "intent": "<brief description of the user's underlying goal>",
-#   "entities": ["<entity1>", "<entity2>", "..."],
-#   "operations": ["<operation1>", "<operation2>", "..."]
-# }
-
-# Constraints:
-# - Do not provide explanations, reasoning, or any text outside the required JSON structure.
-# - Provide structured JSON that can be used directly by downstream agents or systems.
-
-# #####EXAMPLES#####
-# Sample input natural language question: 
-# Group counties by state and calculate the average perimeter in kilometers.
-
-# Sample output: 
-# {'intent': 'Group counties by state and perform calculations',
-# 'entities': ['counties', 'state'],
-# 'operations': ['group', 'calculate', 'average']}
-
-
-# """
-
-# # ---------------------------------------------------------
-# # CONFIGURAZIONE AGENTE
-# # ---------------------------------------------------------
-
-# # Inizializzazione dell'Agente per l'Estrazione Entità
-# # Usa SchemaDeps per mantenere la coerenza con il resto del progetto,
-# # anche se questo specifico agente non interroga ancora il DB.
-# entity_extractor_agent = Agent[SchemaDeps, ExtractionResult](
-#     model=get_model(),
-#     system_prompt=ENTITY_EXTRACTOR_SYSTEM_PROMPT,
-#     retries=3
-#     )
-
-# # ---------------------------------------------------------
-# # FUNZIONI NODO (Per l'integrazione nel Grafo)
-# # ---------------------------------------------------------
-
-# async def run_entity_extractor(state):
-#     """
-#     Esegue l'agente di estrazione entità sulla domanda dell'utente.
-#     """
-#     print(f"--- [Agente 1] ESECUZIONE ENTITY EXTRACTOR SU: '{state['user_query']}' ---")
-    
-#     # Poiché questo agente non usa tool SQL, non serve passare dipendenze complesse qui,
-#     # ma manteniamo la struttura se in futuro servisse contesto (es. data corrente).
-#     # Se SchemaDeps richiede argomenti obbligatori, vanno passati qui.
-#     # Assumiamo per ora che deps possa essere None o un oggetto dummy per questo step puro NLP.
-    
-#     result = await entity_extractor_agent.run(state['user_query'])
-    
-#     print(f"--- [Agente 1] RISULTATO: {result.output} ---")
-    
-#     # Restituisce l'aggiornamento dello stato (chiave definita in models.AgentState)
-#     return {"extraction_data": result.output}
+         return {"error": f"Errore Selector LLM: {str(e)}"}
