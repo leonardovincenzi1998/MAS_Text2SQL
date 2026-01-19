@@ -15,11 +15,26 @@ class ExtractionResult(BaseModel):
     entities: List[str] = Field(..., description="Lista di entità tangibili o nominate (es. luoghi, nomi tabelle, soggetti tematici).")
     operations: List[str] = Field(..., description="Lista di parole o frasi che descrivono operazioni analitiche o logiche (es. 'media', 'vicino a', 'conta').")
 
-#Modello di output atteso dall'LLM
+#Modello di output atteso dall'LLM per la selezione delle tabelle
 class TableSelectionResult(BaseModel):
-    reasoning: str = Field(description="Spiegazione logica del perché queste tabelle sono necessarie.")
-    relevant_tables: List[str] = Field(description="Lista esatta dei nomi delle tabelle da usare.")
-    is_ambiguous: bool = Field(default=False, description="True se servono chiarimenti dall'utente.")
+    # 1. Focus Iniziale: Obblighiamo l'LLM a capire il "centro" del grafo.
+    #    Questo aiuta drasticamente a evitare join scollegati.
+    central_entity: str = Field(
+        description="La tabella principale (Fact Table) attorno a cui ruota la domanda (es. 'BeniMobili' per beni, 'Ammortamenti' per calcoli)."
+    )
+    # 2. Ragionamento: L'LLM spiega i collegamenti prima di dare la lista.
+    reasoning: str = Field(
+        description="Spiegazione logica. Specifica quali tabelle usi per i dati e quali per i filtri/join."
+    )
+    # 3. Selezione: L'output effettivo.
+    relevant_tables: List[str] = Field(
+        description="Lista esatta dei nomi delle tabelle selezionate (inclusi i ponti necessari)."
+    )
+    # 4. Metadata: Utile per logica condizionale nel grafo (es. chiedere chiarimenti).
+    is_ambiguous: bool = Field(
+        default=False,
+        description="True se la domanda è troppo vaga per selezionare tabelle con certezza."
+    )
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]

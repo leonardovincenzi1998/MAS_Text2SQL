@@ -1,6 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-
+from src.graph_utils import expand_selection_with_graph
 # Importiamo la configurazione, i modelli e i tools
 from src.config import BASE_URL, API_KEY, LLM_MODEL_NAME
 from src.models import AgentState, ExtractionResult, TableSelectionResult
@@ -107,18 +107,17 @@ async def run_table_selector(state: AgentState):
     Sei un Senior Data Architect specializzato in SQL.
     
     OBIETTIVO:
-    Selezionare il sottoinsieme minimo di tabelle necessario per rispondere alla domanda dell'utente.
+    Selezionare almeno il sottoinsieme minimo di tabelle necessario per rispondere alla domanda dell'utente.
     
     INPUT:
     1. DOMANDA: "{query}"
-    2. INTENTO RILEVATO: "{intent}"
-    3. TABELLE CANDIDATE (recuperate via ricerca semantica):
+    2. TABELLE CANDIDATE (recuperate via ricerca semantica):
     {schema}
     
     ISTRUZIONI CRITICHE:
     1. **Analisi Semantica**: Usa le descrizioni delle tabelle per capire se contengono i dati richiesti.
     2. **Analisi Relazionale (Join)**: Se selezioni una tabella che usa una Foreign Key (es. `client_id`) per collegarsi a un concetto citato nella domanda (es. "Nome Cliente"), DEVI selezionare anche la tabella riferita se è presente nella lista.
-    3. **Scarta il Rumore**: Se una tabella è stata recuperata ma non c'entra nulla con l'intento (es. tabella 'Log' per una domanda di vendita), scartala.
+    3. **Scarta il Rumore**: Se una tabella è stata recuperata ma non c'entra nulla con la domanda (es. tabella 'Log' per una domanda di vendita), scartala.
     
     OUTPUT:
     Restituisci la lista delle tabelle scelte e una breve spiegazione del perché (es. "Scelgo `Orders` per gli importi e `Customers` per filtrare per nome").
@@ -132,15 +131,29 @@ async def run_table_selector(state: AgentState):
         result = await chain.ainvoke({
             "schema": schema_json,
             "query": state["user_query"],
-            # Passiamo l'intento all'LLM per aiutarlo a filtrare, non a Chroma!
-            "intent": extraction.intent if extraction else "Generico"
         })
         
+        # 1. Prendiamo la selezione "umana" dell'LLM
+        llm_selection = result.relevant_tables
+        
+        # 2. Applichiamo l'Auto-Filler topologico
+        #    Questo aggiungerà 'ValoriInv' se l'LLM ha scelto solo 'BeniMobili' e 'TipiValoreInv'
+        final_selection = expand_selection_with_graph(llm_selection, schema_json)
+        
+        # 3. Calcoliamo cosa è stato aggiunto (per log/debug)
+        added_tables = set(final_selection) - set(llm_selection)
+
+        reasoning_log = result.reasoning
+        if added_tables:
+            msg_autofix = f"\n🤖 [AUTO-FIX] Il sistema ha aggiunto tabelle ponte mancanti: {list(added_tables)}"
+            reasoning_log += msg_autofix
+            print(msg_autofix)
+         
         # Loggare il ragionamento è fondamentale per il debug
-        log_msg = f"✅ Tabelle Selezionate: {result.relevant_tables}\n🤔 Ragionamento: {result.reasoning}"
+        log_msg = f"✅ Tabelle Selezionate: {final_selection}\n🤔 Ragionamento: {reasoning_log}"
         
         return {
-            "selected_tables": result.relevant_tables,
+            "selected_tables": final_selection,
             "candidate_tables_schema": schema_json, # Utile tenerlo nello stato per debug
             "messages": [log_msg]
         }

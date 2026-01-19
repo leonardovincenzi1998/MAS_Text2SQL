@@ -159,6 +159,8 @@ def _parse_and_add_to_map(raw_json_str, schema_map, tables_to_fetch=None):
         full_data = json.loads(raw_json_str)
         tbl_name = full_data.get("real_table_name") or full_data.get("table_name")
 
+        fk_list = full_data.get("foreign_keys", [])
+
         if not tbl_name:
             return
 
@@ -206,7 +208,8 @@ def _parse_and_add_to_map(raw_json_str, schema_map, tables_to_fetch=None):
             "table_canonical": tbl_canon,   # nome canonico (debug/consistenza)
             "desc": desc,
             "categorical_values": hints,
-            "columns": col_names
+            "columns": col_names,
+            "foreign_keys": fk_list
         }
 
         schema_map[tbl_canon] = slim_data
