@@ -86,7 +86,7 @@ def _extract_referenced_tables(ddl: str) -> Set[str]:
 
 
 @tool("search_schema_tool", args_schema=SearchSchemaInput)
-def search_schema_tool(query: str, k: int = 15) -> str:
+def search_schema_tool(query: str, k: int = 10) -> str:
     """
     Retrieval Ibrido: Semantico (BGE-M3) + Relazionale (FK Expansion).
     """

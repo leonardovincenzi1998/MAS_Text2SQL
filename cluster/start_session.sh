@@ -40,6 +40,8 @@ export VLLM_USE_UVLOOP=0
 # In interattivo, di solito NON vogliamo ricreare il DB ogni volta per fare prima.
 # Se serve forzarlo, cambia in "true" o cancella la cartella chroma_db_data a mano.
 export FORCE_REINGEST="false" 
+# Abilita debug grafo (0/1)
+export GRAPH_DEBUG=1
 
 # --- 2. ATTIVAZIONE VENV ---
 source "$SCRATCH_DIR/venv/bin/activate"

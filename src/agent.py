@@ -1,3 +1,4 @@
+import json
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from src.graph_utils import expand_selection_with_graph
@@ -100,6 +101,22 @@ async def run_table_selector(state: AgentState):
     except Exception as e:
         return {"error": f"Errore Chroma: {str(e)}"}
     
+    # --- DEBUG: elenco completo tabelle candidate passate all'Agente 2 ---
+    try:
+        schema_list = json.loads(schema_json) if schema_json else []
+        candidate_tables = []
+        for t in schema_list:
+            name = t.get("table") or t.get("table_name")
+            if name:
+                candidate_tables.append(name)
+        print(f"📦 (Table Selector) Candidate tables passate all'Agente 2: {len(candidate_tables)}")
+        print(f"📋 Candidate list: {candidate_tables}")
+    except Exception as _e:
+        print(f"⚠️ (Table Selector) Impossibile parsare schema_json per debug candidate tables: {_e}")
+
+
+
+    
     # --- B. SELECTION (LLM) ---
     print("🧠 (Table Selector) Filtering intelligente...")
     
@@ -138,7 +155,11 @@ async def run_table_selector(state: AgentState):
         
         # 2. Applichiamo l'Auto-Filler topologico
         #    Questo aggiungerà 'ValoriInv' se l'LLM ha scelto solo 'BeniMobili' e 'TipiValoreInv'
-        final_selection = expand_selection_with_graph(llm_selection, schema_json)
+        final_selection = expand_selection_with_graph(
+            llm_selection,
+            schema_json,
+            root_table_real=result.central_entity
+        )
         
         # 3. Calcoliamo cosa è stato aggiunto (per log/debug)
         added_tables = set(final_selection) - set(llm_selection)

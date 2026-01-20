@@ -29,6 +29,7 @@ scp -r C:\Users\lvincenzi\mas_text2sql\src leonardo.vincenzi@giano.cs.unibo.it:/
 "C:\Users\lvincenzi\Tesi\mas_text2sql"
 scp -r /Users/leonardovincenzi/Desktop/mas_text2sql/src leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/mas_text2sql
 
+scp C:\Users\lvincenzi\Desktop\mas_text2sql\cluster\start_session.sh leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/mas_text2sql/cluster
 
 
 #scaricare file da cluster a locale
