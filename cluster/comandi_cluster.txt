@@ -27,7 +27,7 @@ OPPURE
 #caricare con scp l'intera cartella del progetto - TERMINALE PC AZIENDALE
 scp -r C:\Users\lvincenzi\mas_text2sql\src leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/mas_text2sql
 "C:\Users\lvincenzi\Tesi\mas_text2sql"
-scp -r /Users/leonardovincenzi/Desktop/mas_text2sql/src leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/mas_text2sql
+scp -r /Users/leonardovincenzi//mas_text2sql/cluster leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/mas_text2sql
 
 scp C:\Users\lvincenzi\Desktop\mas_text2sql\cluster\start_session.sh leonardo.vincenzi@giano.cs.unibo.it:/scratch.hpc/leonardo.vincenzi/mas_text2sql/cluster
 
@@ -76,3 +76,12 @@ exit #per uscire dal nodo con la sessione attiva
 
 #previsione partenza job scheduler se in attesa di risorse
 squeue --job 22609 --start
+
+#Controllare la disponibilità (Prima di lanciare srun)
+sinfo -p l40 --format="%N %G %C %t"
+
+#elenco job che stanno usando la gpu
+squeue -p l40 --format="%.10i %.9P %.18j %.8u %.2t %.10M %.6D %R %b"
+
+#vedere i dettagli temporali dei job che occupano le GPU, i numeri dei job variano in base a quelli attivi visti nel comando sopra
+squeue -j 27158,27189,27170 -O "JobID,Partition,TimeUsed,TimeLimit,StartTime"

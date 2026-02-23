@@ -37,91 +37,135 @@ Devi produrre una descrizione discorsiva in ITALIANO che spieghi:
 OUTPUT RICHIESTO: Solamente il testo della descrizione, senza preamboli o markdown extra.
 """
 
-def analyze_columns_heuristics(db_path: str, table_name: str) -> str:
+def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95, threshold_cardinality=1) -> tuple[str, list[str]]:
     """
-    Esegue l'analisi 'intelligente' CON FILTRO NULL:
-    - Controlla se le colonne sono vuote.
-    - Se popolate, cerca categorie.
-    - Prende campioni solo dalle colonne utili.
+    Analisi intelligente delle colonne per identificare quelle significative da includere nella descrizione:
+    - Protegge PK/FK.
+    - Scarta colonne sparse o costanti.
+    - Rileva categorie (Ratio Check),
+      evitando di listare nomi o codici univoci in tabelle piccole.
     """
     conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row 
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
-    analysis_report = []
-    ignored_columns = [] # Lista per le colonne tutti NULL
-    active_columns = []  # Lista per le colonne con dati
+    report_lines = []
+    kept_columns = []
+    dropped_columns = []
+    categorical_hints = []
     
     try:
-        # 1. Ottieni info sulle colonne
+        # 1. Identifica PK e FK
         cursor.execute(f"PRAGMA table_info({table_name})")
-        columns = cursor.fetchall()
+        cols_info = cursor.fetchall()
+        pk_list = {row['name'] for row in cols_info if row['pk'] > 0}
         
-        categorical_hints = []
+        safe_table = table_name.replace('"', '""')
+        cursor.execute(f'PRAGMA foreign_key_list("{safe_table}")')
+        fk_list = {row['from'] for row in cursor.fetchall()}
         
-        for col in columns:
+        structural_cols = pk_list.union(fk_list)
+
+        # 2. Analisi Colonne
+        for col in cols_info:
             col_name = col['name']
             col_type = col['type'].upper()
+            safe_col = f'"{col_name}"'
             
-            # --- CHECK NULL RAPIDO ---
-            # Cerchiamo se esiste almeno 1 riga non NULL.
-            # "SELECT 1" è molto più veloce di "COUNT(*)"
-            cursor.execute(f"SELECT 1 FROM {table_name} WHERE {col_name} IS NOT NULL LIMIT 1")
-            is_populated = cursor.fetchone()
+            is_structural = col_name in structural_cols
             
-            if not is_populated:
-                ignored_columns.append(col_name)
-                continue # Salta al prossimo ciclo, questa colonna è inutile
+            # Query Statistica
+            if any(x in col_type for x in ['INT', 'REAL', 'NUM', 'DEC', 'FLOAT', 'DOUBLE']):
+                empty_condition = f"{safe_col} IS NULL OR {safe_col} = 0"
+            else:
+                empty_condition = f"{safe_col} IS NULL OR {safe_col} = ''"
+
+            stats_query = f"""
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(DISTINCT {safe_col}) as distinct_count,
+                    SUM(CASE WHEN {empty_condition} THEN 1 ELSE 0 END) as empty_count
+                FROM "{safe_table}"
+            """
             
-            active_columns.append(col_name)
+            cursor.execute(stats_query)
+            row = cursor.fetchone()
+            
+            total = row['total']
+            distinct = row['distinct_count']
+            empty = row['empty_count'] or 0
+            
+            sparsity = (empty / total) if total > 0 else 1.0
+            
+            # Logica DROP/KEEP
+            keep = False
+            if total == 0:
+                keep = False
+            elif is_structural:
+                keep = True
+            elif sparsity >= threshold_sparsity:
+                keep = False
+            elif distinct <= threshold_cardinality:
+                keep = False
+            else:
+                keep = True
+            
+            if keep:
+                kept_columns.append(col_name)
+                
+                # --- NUOVA LOGICA CATEGORIE (Ratio Check) ---
+                is_text = ("CHAR" in col_type or "TEXT" in col_type)
+                not_pk = col_name not in pk_list
+                few_distinct = 0 < distinct <= 25
+                
+                # Regola: 
+                # O sono pochissimi in assoluto (<= 5) -> Es. flag booleani
+                # O sono pochi rispetto al totale delle righe (< 50%) -> Es. Categorie vere
+                is_true_category = distinct <= 5 or (distinct < total * 0.5)
 
-            # --- CHECK CATEGORIE (Solo su colonne attive) ---
-            if "CHAR" in col_type or "TEXT" in col_type or col_type == "":
-                try:
-                    cursor.execute(f"SELECT DISTINCT {col_name} FROM {table_name} WHERE {col_name} IS NOT NULL LIMIT 26")
-                    values = [str(row[0]) for row in cursor.fetchall()]
-                    
-                    if 0 < len(values) <= 25:
-                        vals_str = ", ".join(values)
-                        categorical_hints.append(f"- Colonna '{col_name}': [{vals_str}]")
-                except:
-                    continue
+                if is_text and not_pk and few_distinct and is_true_category:
+                    try:
+                        cursor.execute(f'SELECT DISTINCT {safe_col} FROM "{safe_table}" WHERE {safe_col} IS NOT NULL LIMIT 25')
+                        vals = [str(r[0]) for r in cursor.fetchall() if r[0] is not None and str(r[0]).strip() != '']
+                        if vals:
+                            vals_str = ", ".join(vals)
+                            categorical_hints.append(f"- Colonna '{col_name}' ({len(vals)} val): [{vals_str}]")
+                    except:
+                        pass
+            else:
+                if not is_structural:
+                    dropped_columns.append(col_name)
 
-        # --- COSTRUZIONE REPORT ---
-        
-        # A. Avviso colonne vuote (Utile per l'LLM per sapere cosa ignorare)
-        if ignored_columns:
-            analysis_report.append(f"⚠️ COLONNE COMPLETAMENTE VUOTE (IGNORATE): {', '.join(ignored_columns)}")
-            analysis_report.append("")
-
-        # B. Suggerimenti Categorie
+        # 3. Costruzione Report
         if categorical_hints:
-            analysis_report.append("--- VALORI CATEGORICI RILEVATI ---")
-            analysis_report.extend(categorical_hints)
-            analysis_report.append("")
+            report_lines.append("--- VALORI CATEGORICI RILEVATI ---")
+            report_lines.extend(categorical_hints)
+            report_lines.append("")
 
-        # C. Campione Dati (Solo colonne attive)
-        # Costruiamo la query solo con le colonne attive per risparmiare token
-        if active_columns:
-            cols_query = ", ".join(active_columns)
-            cursor.execute(f"SELECT {cols_query} FROM {table_name} LIMIT 3")
+        if dropped_columns:
+            drop_str = ", ".join(dropped_columns[:20]) 
+            if len(dropped_columns) > 20: drop_str += "..."
+            report_lines.append(f"⚠️ COLONNE IGNORATE (Vuote/Costanti): {drop_str}")
+            report_lines.append("")
+
+        if kept_columns:
+            cols_query = ", ".join([f'"{c}"' for c in kept_columns])
+            cursor.execute(f'SELECT {cols_query} FROM "{safe_table}" LIMIT 3')
             rows = cursor.fetchall()
-            
             if rows:
-                analysis_report.append("--- CAMPIONE DATI (Prime 3 righe, solo colonne attive) ---")
-                analysis_report.append(f"Colonne visibili: {cols_query}")
+                report_lines.append("--- CAMPIONE DATI (Solo Colonne Significative) ---")
+                report_lines.append(f"Colonne: {', '.join(kept_columns)}")
                 for row in rows:
-                    # Convertiamo in dict per leggibilità, row_factory aiuta qui
-                    analysis_report.append(str(dict(row)))
+                    report_lines.append(str(dict(row)))
         else:
-            analysis_report.append("Nessuna colonna attiva trovata (Tabella vuota?).")
+            report_lines.append("Nessuna colonna significativa trovata.")
 
     except Exception as e:
-        return f"Errore durante l'analisi: {e}"
+        return f"Errore analisi smart: {e}", []
     finally:
         conn.close()
     
-    return "\n".join(analysis_report)
+    return "\n".join(report_lines), kept_columns
 
 def get_foreign_keys_robust(db_path: str, table_name: str) -> List[Dict]:
     conn = sqlite3.connect(db_path)
@@ -151,41 +195,36 @@ async def process_single_table(db_manager, db_path, table_name, collection, agen
     """
     print(f"   ⏳ Analisi tabella: {table_name}...")
     
-    
     try:
-
         async with semaphore:
             real_table_name = table_name
             canonical_name = get_canonical_name(real_table_name)
+            
+            # Estrazione FK e DDL
             foreign_keys = get_foreign_keys_robust(db_path, real_table_name)
-            # A. Estrazione Dati Tecnici
             ddl = db_manager.get_table_ddl(real_table_name)
 
-        
-            # B. Analisi Euristica (Il 'Trick' dei valori categorici)
-            # Nota: Eseguiamo codice sincrono in thread separato per non bloccare asyncio
-            stats_text = await asyncio.to_thread(analyze_columns_heuristics, db_path, real_table_name)
+            # B. Analisi SMART (Sostituisce quella vecchia euristica)
+            # Rileva PK/FK, pulisce colonne vuote/costanti e genera statistiche
+            stats_text, significant_cols = await asyncio.to_thread(analyze_columns_smart, db_path, real_table_name)
 
-        
             # C. Generazione Descrizione con LLM
             user_content = f"--- DDL TABELLA ---\n{ddl}\n\n{stats_text}"
             result = await agent.run(user_content)
-            description = result.output # In PydanticAI v0.27+ usa .data, altrimenti .output
+            description = result.output # Nota: Adattato a result.data come da PydanticAI recente (o result.output a seconda della versione)
         
             # D. Preparazione Metadata per tools.py
             metadata_payload = {
-                "table_name": real_table_name,       # compatibilità
                 "real_table_name": real_table_name,  # nuovo standard
+                "significant_cols": significant_cols,
                 "canonical_name": canonical_name,
                 "foreign_keys": foreign_keys,
                 "original_ddl": ddl,
                 "generated_description": description,
-                "categorical_hints": stats_text
+                "data_profile": stats_text           # Qui c'è il report 'Smart'
             }
 
             # E. Inserimento nel Vector DB
-            # Creiamo un "Documento Ricco" che contiene sia la semantica che la tecnica
-            # Questo assicura che il retrieval funzioni sia per "Fatturato" che per "imp_net_tot"
             rich_document = f"""
             DESCRIZIONE SEMANTICA:
             {description}
@@ -200,8 +239,8 @@ async def process_single_table(db_manager, db_path, table_name, collection, agen
             collection.upsert(
                 documents=[rich_document],
                 metadatas=[{
-                    "table_name": real_table_name,      # compatibilità
-                    "real_table_name": real_table_name,
+                    #"table_name": real_table_name,      # compatibilità
+                    #"real_table_name": real_table_name,
                     "canonical_name": canonical_name,
                     "table_schema": json.dumps(metadata_payload)
                 }],
@@ -231,12 +270,11 @@ async def main():
     
     # Setup Chroma
     print("🧠 Caricamento Modello Enterprise (BGE-M3)...")
-    # Usa BGE-M3 per sfruttare la context window ampia (8k token) e non troncare la tua analisi euristica
-    emb_fn = get_chroma_embedding_function()  # ✅ GIUSTO (Usa l'adapter) 
+    emb_fn = get_chroma_embedding_function()
 
     chroma_client = chromadb.PersistentClient(path=args.chroma_path)
 
-    # Reset pulito
+    # Reset pulito (opzionale: commenta se vuoi fare upsert incrementale)
     try: chroma_client.delete_collection(COLLECTION_NAME)
     except: pass
     
@@ -244,7 +282,7 @@ async def main():
         name=COLLECTION_NAME, embedding_function=emb_fn
     )
 
-    # Setup Agente (Unica istanza riutilizzata)
+    # Setup Agente
     agent = Agent(model=get_model(), system_prompt=DESCRIPTION_AGENT_PROMPT)
 
     # --- 2. Discovery ---
@@ -254,15 +292,12 @@ async def main():
     max_conc = int(os.getenv("INGEST_MAX_CONCURRENCY", "4"))
     semaphore = asyncio.Semaphore(max(1, max_conc))
 
-
     # --- 3. Esecuzione Parallela ---
-    # Creiamo un task per ogni tabella
     tasks = [
         process_single_table(db_manager, args.db_path, table, collection, agent, semaphore)
         for table in tables
     ]
     
-    # Eseguiamo tutto insieme
     results = await asyncio.gather(*tasks)
     
     success_count = sum(results)

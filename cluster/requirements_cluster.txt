@@ -1,32 +1,38 @@
-# --- Framework Agenti & Orchestrazione ---
+# --- 1. CORE & DIPENDENZE FONDAMENTALI (Critiche per evitare i tuoi errori) ---
+# Queste devono essere installate per prime/esplicitamente
+typing_extensions>=4.10.0   # FIX per l'errore "No module named typing_extensions"
+packaging                   # Necessaria per setuptools e versioning
+numpy<2.0.0                 # Pin a <2 per compatibilità con molte lib AI attuali
+pydantic>=2.9.0             # Forziamo Pydantic V2 per pydantic-ai
+
+# --- 2. Framework Agenti ---
+langchain>=0.3.0            # Versioni 0.3+ hanno supporto nativo Pydantic V2
 langgraph
-langchain
 langchain-openai
 langchain-community
-langchain-huggingface      # Integrazione nativa con modelli HF
-openai                     # Client standard usato da PydanticAI per parlare con vLLM
-chromadb
+langchain-huggingface
 langchain-chroma
+chromadb                    # Database vettoriale
 sentence-transformers
+openai
 
-# --- Gestione Dati & Strutture ---
+# --- 3. Pydantic AI & Dati ---
 pydantic-ai
 pandas
-nest_asyncio               # Fondamentale per evitare errori di loop asyncio su script complessi/Jupyter
+nest_asyncio                # Fondamentale per i loop asyncio
 
-# --- Database & SQL ---
+# --- 4. Database & SQL ---
 sqlalchemy
 sqlglot
 
-# --- Backend AI & GPU (Infrastruttura Cluster) ---
-vllm==0.6.4.post1                       # Il server di inferenza ad alte prestazioni (sostituisce Ollama)
-transformers               # Libreria base per modelli HuggingFace
-accelerate                 # Gestione efficiente del caricamento modelli su GPU
-bitsandbytes               # Necessario se vuoi usare modelli quantizzati (es. 8-bit/4-bit) per risparmiare VRAM
+# --- 5. Backend AI (vLLM & GPU) ---
+# vLLM è molto sensibile alle versioni.
+vllm==0.6.4.post1
+transformers
+accelerate
+bitsandbytes                # Ottimo per caricare modelli in 4-bit/8-bit
 
-# --- Utility ---
-python-dotenv              # Gestione variabili d'ambiente (.env)
-huggingface_hub[cli]       # Per scaricare i modelli e login (inclusa CLI)
-
-## Dentro run_agent.sbatch, nella sezione setup o prima di avviare
-#pip install langchain-chroma langchain-huggingface sentence-transformers --no-cache-dir
+# --- 6. Utility & Ambiente ---
+python-dotenv
+huggingface_hub[cli]
+tiktoken                    # Spesso richiesto dai tokenizzatori, meglio esplicitarlo

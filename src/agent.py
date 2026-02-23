@@ -67,6 +67,12 @@ async def run_entity_extractor(state: AgentState):
     
     try:
         extraction = await chain.ainvoke({"input": state['user_query']})
+        
+        # Log di debug
+        ops = extraction.operations if extraction.operations else "Nessuna"
+        print(f"   -> Entità: {extraction.entities}")
+        print(f"   -> Operazioni: {ops}")
+        
         return {
             "extraction_result": extraction,
             "messages": [f"Entità: {extraction.entities} | Intento: {extraction.intent}"]
@@ -83,9 +89,7 @@ async def run_table_selector(state: AgentState):
     
     extraction = state.get("extraction_result")
     
-    # --- MIGLIORIA 1: Query Pulita per Chroma ---
-    # Usiamo SOLO le entità per la ricerca vettoriale. 
-    # Le parole come "Media", "Conta", "Raggruppa" confondono il vector store.
+# --- A. PREPARAZIONE QUERY VETTORIALE ---
     if extraction and extraction.entities:
         # Uniamo le entità. Es: "Fabbricati Vincoli"
         vector_search_query = " ".join(extraction.entities)
@@ -94,7 +98,15 @@ async def run_table_selector(state: AgentState):
         # Fallback sulla query intera se non ci sono entità
         vector_search_query = state["user_query"]
 
-    # --- A. RETRIEVAL (Tool) ---
+
+    # Formattiamo le operazioni per il prompt
+    # Fix per evitare crash se extraction è None
+    if extraction and extraction.operations:
+         ops_str = ", ".join(extraction.operations)
+    else:
+         ops_str = "None (Simple SELECT)"
+    
+    # --- B. RETRIEVAL (Tool) ---
     try:
         # Recuperiamo un numero generoso di tabelle (es. 10-15) per avere contesto
         schema_json = search_schema_tool.invoke({"query": vector_search_query, "k": 10})
@@ -117,7 +129,7 @@ async def run_table_selector(state: AgentState):
 
 
     
-    # --- B. SELECTION (LLM) ---
+    # --- C. SELECTION (LLM) ---
     print("🧠 (Table Selector) Filtering intelligente...")
     
     selector_prompt = """
@@ -148,6 +160,8 @@ async def run_table_selector(state: AgentState):
         result = await chain.ainvoke({
             "schema": schema_json,
             "query": state["user_query"],
+            "intent": extraction.intent if extraction else "Generic",
+            "operations": ops_str
         })
         
         # 1. Prendiamo la selezione "umana" dell'LLM
@@ -157,7 +171,7 @@ async def run_table_selector(state: AgentState):
         #    Questo aggiungerà 'ValoriInv' se l'LLM ha scelto solo 'BeniMobili' e 'TipiValoreInv'
         final_selection = expand_selection_with_graph(
             llm_selection,
-            schema_json,
+            schema_list,
             root_table_real=result.central_entity
         )
         
