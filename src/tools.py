@@ -80,15 +80,15 @@ def search_schema_tool(query: str, k: int = 10) -> str:
     try:
         vectorstore = get_vectorstore()
         
-        # Usiamo MMR per diversificare, ma con fetch_k alto per scansionare bene
-        anchor_results = vectorstore.max_marginal_relevance_search(
-            query, k=k, fetch_k=30, lambda_mult=0.6
-        )
+        # Torniamo alla similarity search pura
+        anchor_results = vectorstore.similarity_search(query, k=k)
 
         final_schema_map: Dict[str, dict] = {}
         tables_to_fetch_names: Set[str] = set()
 
-        print(f"\n🕸️  [GRAPH RAG] Start: {len(anchor_results)} anchor tables trovate.")
+        # 🔥 Estraiamo i nomi canonici dai metadati per il log
+        anchor_names = [doc.metadata.get("canonical_name", "unknown") for doc in anchor_results]
+        print(f"\n🕸️  [GRAPH RAG] Start: {len(anchor_results)} anchor tables trovate: {anchor_names}")
 
         # --- FASE A: Anchor Nodes ---
         for doc in anchor_results:
@@ -186,17 +186,45 @@ def _parse_and_add_to_map(raw_json_str, schema_map, tables_to_fetch=None):
         smart_hints = "\n".join(categorical_lines[:6])
         if len(categorical_lines) > 6: smart_hints += "\n..."
 
+      # --- PULIZIA INTELLIGENTE DELLA DESCRIZIONE (REGEX DEFINITIVA) ---
         desc = full_data.get("generated_description", "")
-        if len(desc) > 1000: 
-            desc = desc[:1000] + "..."
+        
+        # Intercetta in modo case-insensitive: 
+        # "**Colonne", "**Le colonne", "- **NomeColonna**:", "Vocabolario", "Relazioni"
+        pattern = r'\n\s*(?:\*\*?(?:le\s+)?colonn|\-\s*(?:\*\*|`)?\w+(?:\*\*|`)?\s*:|\*\*?vocabolario|\*\*?relazioni)'
+        match = re.search(pattern, desc, re.IGNORECASE)
+        
+        if match:
+            desc = desc[:match.start()]
+            
+        desc = desc.strip()
+        if len(desc) > 800: 
+            desc = desc[:800] + "..."
 
+        # --- PULIZIA VALORI CATEGORICI (TAGLIA I MURI DI TESTO) ---
+        raw_profile = full_data.get("data_profile", "")
+
+        categorical_lines = []
+        for line in raw_profile.split('\n'):
+            if line.strip().startswith("- Colonna"):
+                # Se la stringa dei valori è chilometrica (es. Annotazioni), la tronchiamo
+                if len(line) > 150:
+                    line = line[:145] + "...]"
+                categorical_lines.append(line.strip())
+                
+        smart_hints = "\n".join(categorical_lines[:6])
+        if len(categorical_lines) > 6: 
+            smart_hints += "\n..."
+        
+        
         # Costruzione Oggetto Finale con FK complete!
         schema_map[tbl_canon] = {
             "table_name": tbl_name,
             "description": desc,
             "columns": significant_cols,   
             "categorical_values": smart_hints,
-            "foreign_keys": fk_list  # 🔥 Ora l'LLM e il Grafo hanno tutti i dati
+            "foreign_keys": fk_list,
+            "column_samples": full_data.get("column_samples", {})
         }
 
     except Exception as e:

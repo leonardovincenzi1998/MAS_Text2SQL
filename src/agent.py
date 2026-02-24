@@ -1,5 +1,6 @@
 import json
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 from src.graph_utils import expand_selection_with_graph
 # Importiamo la configurazione, i modelli e i tools
@@ -69,7 +70,7 @@ async def run_entity_extractor(state: AgentState):
     try:
         extraction = await chain.ainvoke({"input": state['user_query']})
         
-        # Log di debug
+        # Log di debug arricchiti per il nuovo prompt
         ops = extraction.operations if extraction.operations else "Nessuna"
         print(f"   -> Entità: {extraction.entities}")
         print(f"   -> Operazioni: {ops}")
@@ -94,26 +95,33 @@ def format_schema_for_llm(schema_list: list) -> str:
         cols = tbl.get("columns", [])
         fks = tbl.get("foreign_keys", [])
         cat_vals = tbl.get("categorical_values", "")
+        samples = tbl.get("column_samples", {})
         
-        # Mappatura rapida delle FK per annotare le colonne
+        # Mappatura rapida delle FK
         fk_map = {}
         for fk in fks:
             from_col = fk.get("from_column")
             to_tbl = fk.get("to_table_real") or fk.get("to_table_canonical")
-            to_col = fk.get("to_column") # <-- AGGIUNTA
-            
+            to_col = fk.get("to_column")
             if from_col and to_tbl:
-                # Se abbiamo anche la colonna target, la aggiungiamo (Tabella.Colonna)
                 target = f"{to_tbl}.{to_col}" if to_col else to_tbl
                 fk_map[from_col] = target
                 
-        # Costruiamo la tupla di colonne con annotazioni FK
+        # Costruiamo la tupla di colonne con annotazioni FK ed ESEMPI
         col_tuples = []
         for col in cols:
+            col_str = col
+            # 1. Aggiungiamo la FK se esiste
             if col in fk_map:
-                col_tuples.append(f"{col} [FK->{fk_map[col]}]")
-            else:
-                col_tuples.append(col)
+                col_str += f" [FK->{fk_map[col]}]"
+            
+            # 2. Aggiungiamo gli esempi se esistono
+            if col in samples and samples[col]:
+                # Pulizia valori per evitare "a capo" accidentali che rompono il layout
+                safe_samples = [str(s).replace('\n', ' ').replace('\r', '') for s in samples[col]]
+                col_str += f" (Esempi: {', '.join(safe_samples)})"
+                
+            col_tuples.append(col_str)
                 
         # Formattazione Pseudo-Markdown
         tbl_md = f"### Tabella: {name}\n"
@@ -136,14 +144,16 @@ async def run_table_selector(state: AgentState):
     
     extraction = state.get("extraction_result")
     
-# --- A. PREPARAZIONE QUERY VETTORIALE ---
+    # --- A. PREPARAZIONE QUERY VETTORIALE ---
     if extraction and extraction.entities:
-        # Uniamo le entità. Es: "Fabbricati Vincoli"
-        vector_search_query = " ".join(extraction.entities)
-        print(f"   Testo usato per Chroma: '{vector_search_query}'")
+        # HYBRID QUERY: Domanda originale (per il contesto semantico) + Entità (per il boost delle keyword)
+        entities_str = " ".join(extraction.entities)
+        vector_search_query = f"{state['user_query']} {entities_str}"
     else:
         # Fallback sulla query intera se non ci sono entità
         vector_search_query = state["user_query"]
+        
+    print(f"   Testo usato per Chroma: '{vector_search_query}'")
 
     # Formattiamo le operazioni per il prompt
     # Fix per evitare crash se extraction è None

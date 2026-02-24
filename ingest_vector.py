@@ -37,7 +37,7 @@ Devi produrre una descrizione discorsiva in ITALIANO che spieghi:
 OUTPUT RICHIESTO: Solamente il testo della descrizione, senza preamboli o markdown extra.
 """
 
-def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95, threshold_cardinality=1) -> tuple[str, list[str]]:
+def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95, threshold_cardinality=1) -> tuple[str, list[str], dict]:
     """
     Analisi intelligente delle colonne per identificare quelle significative da includere nella descrizione:
     - Protegge PK/FK.
@@ -148,24 +148,38 @@ def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95
             report_lines.append(f"⚠️ COLONNE IGNORATE (Vuote/Costanti): {drop_str}")
             report_lines.append("")
 
+        column_samples = {}
+        
         if kept_columns:
+            # Estraiamo i sample da passare strutturati al RAG
             cols_query = ", ".join([f'"{c}"' for c in kept_columns])
-            cursor.execute(f'SELECT {cols_query} FROM "{safe_table}" LIMIT 3')
+            cursor.execute(f'SELECT {cols_query} FROM "{safe_table}" LIMIT 20')
             rows = cursor.fetchall()
-            if rows:
-                report_lines.append("--- CAMPIONE DATI (Solo Colonne Significative) ---")
-                report_lines.append(f"Colonne: {', '.join(kept_columns)}")
+            
+            for col in kept_columns:
+                samples = set()
                 for row in rows:
-                    report_lines.append(str(dict(row)))
+                    val = row[col]
+                    # Scartiamo i null e limitiamo la lunghezza a 40 char per non esplodere i token
+                    if val is not None and str(val).strip() != '':
+                        samples.add(str(val)[:40]) 
+                
+                if samples:
+                    column_samples[col] = list(samples)[:3] # Prendiamo massimo 3 valori diversi
+
+            # Aggiungiamo anche le righe grezze al report per l'Agent 1 (opzionale)
+            report_lines.append("--- CAMPIONE DATI ---")
+            for row in rows[:3]:
+                report_lines.append(str(dict(row)))
         else:
             report_lines.append("Nessuna colonna significativa trovata.")
 
     except Exception as e:
-        return f"Errore analisi smart: {e}", []
+        return f"Errore analisi smart: {e}", [], {}
     finally:
         conn.close()
     
-    return "\n".join(report_lines), kept_columns
+    return "\n".join(report_lines), kept_columns, column_samples
 
 def get_foreign_keys_robust(db_path: str, table_name: str) -> List[Dict]:
     conn = sqlite3.connect(db_path)
@@ -206,7 +220,7 @@ async def process_single_table(db_manager, db_path, table_name, collection, agen
 
             # B. Analisi SMART (Sostituisce quella vecchia euristica)
             # Rileva PK/FK, pulisce colonne vuote/costanti e genera statistiche
-            stats_text, significant_cols = await asyncio.to_thread(analyze_columns_smart, db_path, real_table_name)
+            stats_text, significant_cols, column_samples = await asyncio.to_thread(analyze_columns_smart, db_path, real_table_name)
 
             # C. Generazione Descrizione con LLM
             user_content = f"--- DDL TABELLA ---\n{ddl}\n\n{stats_text}"
@@ -221,7 +235,8 @@ async def process_single_table(db_manager, db_path, table_name, collection, agen
                 "foreign_keys": foreign_keys,
                 "original_ddl": ddl,
                 "generated_description": description,
-                "data_profile": stats_text           # Qui c'è il report 'Smart'
+                "data_profile": stats_text,           # Qui c'è il report 'Smart'
+                "column_samples": column_samples      # Campioni per ogni colonna significativa
             }
 
             # E. Inserimento nel Vector DB
