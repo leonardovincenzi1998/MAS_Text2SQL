@@ -17,36 +17,87 @@ llm = ChatOpenAI(
     model=LLM_MODEL_NAME,
     openai_api_base=BASE_URL,
     openai_api_key=API_KEY,
-    temperature=0
+    temperature=0.1
 )
 
 # ---------------------------------------------------------
 # 2. PROMPT (La tua logica originale, adattata)
 # ---------------------------------------------------------
 ENTITY_EXTRACTOR_SYSTEM_PROMPT = """
-Ruolo:
-Sei un esperto di comprensione delle query e recupero delle informazioni.
-Sei specializzato nell'analisi delle domande degli utenti per estrarre informazioni significative per i sistemi di retrieval.
-Il tuo obiettivo:
-Identificare le componenti chiave da recuperare dalla domanda di un utente, compreso l'intento, le entità importanti e le operazioni rilevanti.
-Il tuo compito:
-1. **Rilevamento dell'intento**: determinare ciò che l'utente sta realmente chiedendo. Riassumerlo in una frase concisa.
-2. **Estrazione delle parole chiave**: identificare parole chiave o frasi importanti. Trattare le entità denominate composte da più parole come singole parole chiave.
-3. **Classificazione delle parole chiave**:
-   - **Entità**: elementi tangibili, oggetti aziendali, nomi di tabelle, valori specifici.
-   - **Operazioni**: parole analitiche (media, massimo, conteggio, maggiore di), devono essere espresse in linguaggio SQLite (es. AVG, MAX, COUNT, SUM, WHERE, ORDER BY, GROUP BY).
-Modalità di ragionamento:
-Pensa passo dopo passo. Concentrati sulla logica aziendale e sui requisiti di recupero dei dati.
+### ROLE
+You are a highly specialized Natural Language to SQL (NL2SQL) Parser. 
+Your expertise lies in mapping Italian natural language queries into structured data components that will be use for select relevant tables and columns for SQLite retrieval for a multi-agent system text2sql.
 
-#####ESEMPI#####
-Input: ‘Voglio che raggruppi tutti i vincoli che ci sono per ogni fabbricato’
-Output: Intent="Raggruppare i vincoli per ogni fabbricato", Entità=["Vincoli", "Fabbricati"], Operazioni=["GROUP BY"]
+### OPERATIONAL CONSTRAINTS
+- INPUT: Italian natural language.
+- OUTPUT: Strictly valid JSON.
+- LANGUAGE FOR REASONING: English.
+- LANGUAGE FOR ENTITIES/INTENT: Italian (must match the Database schema).
+- NO CONVERSATIONAL FILLERS: Do not say "Here is the result" or "Sure".
+- THINK STEP BY STEP: Focus on understanding the request of the user querying the database. If the request is complicated or long, break it down into pieces and think about what detailed information the user is looking for.
 
-Input: "Voglio che calcoli la media della superficie dei terreni"
-Output: Intent="Calcolare media superficie terreni", Entità=["Terreni", "Superficie"], Operazioni=["AVG"]
+### EXTRACTION LOGIC & HIERARCHY
+1. **Intent Extraction**: 
+   - Define the primary goal or goals in Italian. 
+   - Use standard verbs: “Selezione”, "Conteggio", "Media", "Ricerca", "Raggruppamento”, “Ordinamento”.
 
-Input: "Quanti vincoli ci sono?"
-Output: Intent="Conteggio vincoli", Entità=["Vincoli"], Operazioni=["COUNT"]
+2. **Entity & Attribute Mapping**:
+   - Identify possible tables (e.g., “Buildings”) and columns (e.g., “Surface area”) that can answer the user's question in detail.
+   - **Crucial**: Keep the original Italian terminology. Do NOT translate "Terreni" to "Lands".
+   - Handle multi-word entities as a single string but also search lonely (e.g., "Codice Fiscale", "Destinazione d'uso").
+
+3. **SQL Operation Mapping**:
+   - **AGGREGATIONS**: If the users ask for aggregations or other operations map "quanto/quanti" to `COUNT`, "media" to `AVG`, "totale/somma" to `SUM`, "massimo" to `MAX`, "minimo" to `MIN`.
+   - **FILTERS (WHERE)**: If the user specifies a condition (e.g., "solo quelli a Roma", "maggiore di 100"), extract the condition and map it to `WHERE`.
+   - **GROUPING**: If the user asks for grouped results "per ogni" or "raggruppati per", map to `GROUP BY`.
+   - **SORTING**: If the user asks for ordered results or limited results "i primi", "i più cari", "in ordine", map to `ORDER BY` + `LIMIT` if necessary.
+
+### JSON SCHEMA
+{{
+  "reasoning": "Step-by-step logic in English including why specific SQL operators were chosen.",
+  "intent": "Concise summary in Italian.",
+  "entities": ["list", "of", "italian", "terms"],
+  "operations": ["SQL_KEYWORDS"],
+  "filters": ["Specific conditions identified, e.g., 'superficie > 100'"]
+}}
+
+#####FEW-SHOT EXAMPLES#####
+
+Input: "Quali sono i beni mobili con etichetta con valore 1 come prima apertura"
+Output: {{
+  "reasoning": "The user wants to retrieve specific assets ('beni mobili') and their values, filtering specifically for those marked as initial opening ('prima apertura'). We need to select the data and apply an exact match filter for this boolean/numeric condition.",
+  "intent": "Ricerca beni mobili con valore di prima apertura",
+  "entities": ["beni mobili", "etichetta", "valore", "prima apertura"],
+  "operations": ["SELECT", "WHERE"],
+  "filters": ["prima apertura = 1"]
+}}
+
+Input: "Forniscimi l'elenco dei beni attivi, non eliminati"
+Output: {{
+  "reasoning": "The user is asking for a list of active assets ('beni attivi') and explicitly requires excluding the deleted ones ('non eliminati'). This translates to a standard SELECT with a boolean filter ensuring the 'deleted' flag is false.",
+  "intent": "Elenco beni attivi e non eliminati",
+  "entities": ["beni attivi", "non eliminati", "eliminato"],
+  "operations": ["SELECT", "WHERE"],
+  "filters": ["eliminato = 0"]
+}}
+
+Input: "Voglio la descrizione dei beni mobili, della specie e sottospecie, e in quale locale ed edficio si trovano, con il tipo etichetta uguale a 'F' e le informazioni su lotto e tipo di etichetta"
+Output: {{
+  "reasoning": "The query asks for a detailed description of assets ('beni mobili'), their classification ('specie', 'sottospecie'), and spatial location ('locale', 'edificio'). It explicitly applies an exact text match filter on the label type ('tipo etichetta').",
+  "intent": "Dettagli, classificazione e ubicazione beni mobili con etichetta specifica",
+  "entities": ["descrizione", "beni mobili", "specie", "sottospecie", "locale", "edificio", "tipo etichetta", "lotto"],
+  "operations": ["SELECT", "WHERE"],
+  "filters": ["tipo etichetta = 'F'"]
+}}
+
+Input: "Valori non di prima apertura per data"
+Output: {{
+  "reasoning": "The user wants to find financial/inventory values ('valori') that are NOT flagged as initial opening ('non di prima apertura'), correlated with a date ('data'). This requires a negative boolean filter on the opening flag.",
+  "intent": "Ricerca valori non di prima apertura filtrati per data",
+  "entities": ["valori", "prima apertura", "data"],
+  "operations": ["SELECT", "WHERE"],
+  "filters": ["prima apertura = 0"]
+}}
 """
 
 # ---------------------------------------------------------
@@ -55,7 +106,7 @@ Output: Intent="Conteggio vincoli", Entità=["Vincoli"], Operazioni=["COUNT"]
 
 async def run_entity_extractor(state: AgentState):
     """
-    NODO 1: Nessuna modifica sostanziale necessaria, è ben fatto.
+    NODO 1: Estrazione Entità, Operazioni e Filtri.
     """
     print(f"🕵️‍♀️ (Entity Extractor) Analisi query: '{state['user_query']}'")
     
@@ -70,18 +121,24 @@ async def run_entity_extractor(state: AgentState):
     try:
         extraction = await chain.ainvoke({"input": state['user_query']})
         
-        # Log di debug arricchiti per il nuovo prompt
+        # Gestione sicura delle liste vuote
         ops = extraction.operations if extraction.operations else "Nessuna"
-        print(f"   -> Entità: {extraction.entities}")
-        print(f"   -> Operazioni: {ops}")
+        filtri = extraction.filters if extraction.filters else "Nessuno"
         
+        # Log dettagliato con i nuovi campi richiesti dal prompt
+        print(f"   -> 🧠 Ragionamento: {extraction.reasoning}")
+        print(f"   -> 🎯 Intento: {extraction.intent}")
+        print(f"   -> 🔑 Entità: {extraction.entities}")
+        print(f"   -> ⚙️  Operazioni: {ops}")
+        print(f"   -> 🗂️  Filtri: {filtri}")
+        
+        # Salviamo tutto nello stato usando la sintassi originale a stringa
         return {
             "extraction_result": extraction,
-            "messages": [f"Entità: {extraction.entities} | Intento: {extraction.intent}"]
+            "messages": [f"Entità: {extraction.entities} | Filtri: {filtri} | Intento: {extraction.intent}"]
         }
     except Exception as e:
         return {"error": f"Errore Extractor: {str(e)}"}
-
 
 def format_schema_for_llm(schema_list: list) -> str:
     """
@@ -192,27 +249,66 @@ async def run_table_selector(state: AgentState):
     print("🧠 (Table Selector) Filtering intelligente...")
     
     selector_prompt = """
-    Sei un Senior Data Architect specializzato in SQL.
-    
-    OBIETTIVO:
-    Seleziona le tabelle necessarie per rispondere in modo dettagliato alla domanda dell'utente.
-    
-    INPUT:
-    1. DOMANDA: "{query}"
-    2. TABELLE CANDIDATE (recuperate via ricerca semantica):
-    {schema}
-    
-    ISTRUZIONI CRITICHE:
-    1. **Analisi Semantica**: Usa le descrizioni e i nomi delle colonne delle tabelle per capire se contengono i dati richiesti.
-    2. **Analisi Relazionale (Join)**: Se selezioni una tabella che usa una Foreign Key (es. `client_id`) per collegarsi a un concetto citato nella domanda (es. "Nome Cliente"), DEVI selezionare anche la tabella riferita se è presente nella lista.
-    3. **Scarta il Rumore**: Se una tabella è stata recuperata ma non c'entra nulla con la domanda (es. tabella 'Log' per una domanda di vendita), scartala.
-    4. **Colonne ID**: Le colonne che iniziano per `Id` contengono SOLO codici numerici che l'utente non può interpretare. NON puoi fermarti alla colonna ID, DEVI obbligatoriamente selezionare la tabella di destinazione seguendo la `[FK->...]` per recuperare i campi descrittivi.
-    
-    OUTPUT:
-    Restituisci la lista delle tabelle scelte e una breve spiegazione del perché (es. "Scelgo `Orders` per gli importi e `Customers` per filtrare per nome").
+    ### ROLE
+    You are a Senior Data Architect specialized in SQL and Database routing. 
+    Your expertise lies in analyzing Italian natural language queries and selecting the complete subset of tables from a given database schema to answer the query in detail.
+
+    ### OPERATIONAL CONSTRAINTS
+    - INPUT: Italian user query and a Candidate Schema (Tables, Columns, Foreign Keys, Samples).
+    - OUTPUT: Strictly valid JSON.
+    - LANGUAGE FOR REASONING: English.
+    - LANGUAGE FOR TABLE NAMES: Must strictly match the exact names provided in the schema (case-sensitive).
+    - NO CONVERSATIONAL FILLERS: Do not add greetings or extra text.
+    - THINK STEP BY STEP: Focus heavily on data relationships and table linkages (JOINs) needed to retrieve the requested info.
+
+    ### SELECTION LOGIC & CRITERIA
+    1. **Semantic Matching**: Read all column names, descriptions and samples for each table and column. Do NOT assume a table contains data if you don't see the column. If the user asks for an "address", look for tables with "Via", "Civico", "Comune" (e.g., `Edifici`). 
+    2. **Foreign Key Chaining (CRITICAL)**: Bridge tables (e.g., `MobiliLocali`, `MobiliSottoSpeci`) are never enough to get textual details. You MUST follow the `[FK->Table.Column]` annotations to reach the final descriptive table (e.g., `Locali`, `Speci`).
+    3. **The ID Rule**: Columns starting with `Id` (e.g., `IdSottoSpecie`) contain ONLY numerical codes. If the user asks for "details", "name", or "description", you CANNOT stop at the ID column. You MUST include the target table.
+    4. **Discard Noise**: Ignore tables that were retrieved by the semantic search but are irrelevant to the specific user intent.
+
+    ### JSON SCHEMA
+    {{
+    "reasoning": "Step-by-step logic in English detailing why each table was chosen and how they connect via FKs to answer the user query.",
+    "central_entity": "The exact name of the main driving table representing the core subject (e.g., 'BeniMobili').",
+    "relevant_tables": ["List", "of", "exact", "table", "names"]
+    }}
+
+    #####FEW-SHOT EXAMPLES#####
+
+    Input:
+    QUERY: "Dimmi in quali stanze si trovano gli armadi e a che piano sono."
+    SCHEMA: [Context with BeniMobili, MobiliLocali, Locali, Edifici, SottoSpeci...]
+    Output: {{
+    "reasoning": "The core entity is 'BeniMobili' (armadi). The user wants to know the room ('stanze') and the floor ('piano'). Looking at the schema, the floor ('Piano') and room description are in the 'Locali' table. To link 'BeniMobili' to 'Locali', we must traverse the bridge table 'MobiliLocali' using 'IdBeneMobile' and 'IdLocale'. No other tables are needed.",
+    "central_entity": "BeniMobili",
+    "relevant_tables": ["BeniMobili", "MobiliLocali", "Locali"]
+    }}
+
+    Input: 
+    QUERY: "Quante schede patrimoniali attive abbiamo inserito nel 2019?"
+    SCHEMA: [Context with SchedePatrimoniali, TipiValoreInv, Locali...]
+    Output: {{
+    "reasoning": "The user asks for a count of active patrimonial cards ('schede patrimoniali attive') filtered by insertion year (2019). The 'SchedePatrimoniali' table contains both the 'IsSchedaAttiva' flag and the 'DTInserimento' date. No foreign keys need to be resolved for descriptions.",
+    "central_entity": "SchedePatrimoniali",
+    "relevant_tables": ["SchedePatrimoniali"]
+    }}
+
+    Input:
+    QUERY: "Quali sono i codici ARCONET dei piani economici usati per le nostre categorie contabili?"
+    SCHEMA: [Context with Categorie, PianiEcoStatiPatrimoniali, Locali...]
+    Output: {{   
+    "reasoning": "The main topic is accounting categories ('Categorie'). To find the ARCONET codes ('codici ARCONET'), we must look at the 'PianiEcoStatiPatrimoniali' table, because 'Categorie' only has an 'IdPianoEcoStatoPatrimoniale' numerical column. We need both tables to resolve the relation.",
+    "central_entity": "Categorie",
+    "relevant_tables": ["Categorie", "PianiEcoStatiPatrimoniali"]
+    }}   
+
     """
     
-    prompt = ChatPromptTemplate.from_template(selector_prompt)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", selector_prompt),
+        ("human", "### EXECUTION\nQUERY: {query}\nSCHEMA:\n{schema}\n\nOutput:")
+    ])
     structured_llm = llm.with_structured_output(TableSelectionResult)
     chain = prompt | structured_llm
     

@@ -186,12 +186,23 @@ def _parse_and_add_to_map(raw_json_str, schema_map, tables_to_fetch=None):
         smart_hints = "\n".join(categorical_lines[:6])
         if len(categorical_lines) > 6: smart_hints += "\n..."
 
-      # --- PULIZIA INTELLIGENTE DELLA DESCRIZIONE (REGEX DEFINITIVA) ---
+      # --- PULIZIA INTELLIGENTE DELLA DESCRIZIONE (SUPER REGEX) ---
         desc = full_data.get("generated_description", "")
         
-        # Intercetta in modo case-insensitive: 
-        # "**Colonne", "**Le colonne", "- **NomeColonna**:", "Vocabolario", "Relazioni"
-        pattern = r'\n\s*(?:\*\*?(?:le\s+)?colonn|\-\s*(?:\*\*|`)?\w+(?:\*\*|`)?\s*:|\*\*?vocabolario|\*\*?relazioni)'
+        # Intercetta in modo case-insensitive:
+        # 1. Frasi che iniziano con "Colonne" o "Le colonne" (con 0, 1 o 2 asterischi)
+        # 2. Qualsiasi riga che contiene la parola "colonn" e finisce con i due punti ":"
+        # 3. Elenchi numerati (es. "1. **IdMobile**:") o puntati (es. "- **IdLocale**:")
+        # 4. Sezioni "Vocabolario" o "Relazioni"
+        pattern = (
+            r'\n\s*(?:'
+            r'\*{0,2}(?:le\s+)?colonn|'
+            r'[^\n]*\bcolonn[a-z]*\b[^\n]*:|'
+            r'(?:\d+\.|\-)\s*(?:\*\*|`)?\w+(?:\*\*|`)?\s*:|'
+            r'\*{0,2}vocabolario|'
+            r'\*{0,2}relazioni'
+            r')'
+        )
         match = re.search(pattern, desc, re.IGNORECASE)
         
         if match:
@@ -215,7 +226,6 @@ def _parse_and_add_to_map(raw_json_str, schema_map, tables_to_fetch=None):
         smart_hints = "\n".join(categorical_lines[:6])
         if len(categorical_lines) > 6: 
             smart_hints += "\n..."
-        
         
         # Costruzione Oggetto Finale con FK complete!
         schema_map[tbl_canon] = {
