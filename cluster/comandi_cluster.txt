@@ -85,3 +85,11 @@ squeue -p l40 --format="%.10i %.9P %.18j %.8u %.2t %.10M %.6D %R %b"
 
 #vedere i dettagli temporali dei job che occupano le GPU, i numeri dei job variano in base a quelli attivi visti nel comando sopra
 squeue -j 27158,27189,27170 -O "JobID,Partition,TimeUsed,TimeLimit,StartTime"
+
+
+
+#Comandi per scaricare modello embedding
+source venv/bin/activate
+mkdir -p /scratch.hpc/leonardo.vincenzi/mas_text2sql/local_models/bge-m3
+huggingface-cli download BAAI/bge-m3 --local-dir /scratch.hpc/leonardo.vincenzi/mas_text2sql/local_models/bge-m3 --local-dir-use-symlinks False
+python /scratch.hpc/leonardo.vincenzi/mas_text2sql/src/utils.py

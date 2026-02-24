@@ -1,28 +1,29 @@
 import json
+import warnings
+from typing import Dict, Any
+
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
-from src.graph_utils import expand_selection_with_graph
-# Importiamo la configurazione, i modelli e i tools
-from src.config import BASE_URL, API_KEY, LLM_MODEL_NAME
+
+from src.utils import expand_selection_with_graph
 from src.models import AgentState, ExtractionResult, TableSelectionResult
 from src.tools import search_schema_tool
-import warnings
+
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
-# ---------------------------------------------------------
-# 1. CONFIGURAZIONE LLM (LangChain Adapter)
-# ---------------------------------------------------------
-# Usiamo le variabili di config.py per connetterci a Ollama/Cluster
+
+LLM_MODEL_NAME = 'Qwen/Qwen2.5-32B-Instruct-AWQ' 
+BASE_URL = 'http://localhost:8000/v1'
+API_KEY = 'EMPTY'
+
+# llm configuration via langchain adapter
 llm = ChatOpenAI(
     model=LLM_MODEL_NAME,
     openai_api_base=BASE_URL,
     openai_api_key=API_KEY,
     temperature=0.1
-)
+    )
 
-# ---------------------------------------------------------
-# 2. PROMPT (La tua logica originale, adattata)
-# ---------------------------------------------------------
+# prompts maintained exactly as original for stability
 ENTITY_EXTRACTOR_SYSTEM_PROMPT = """
 ### ROLE
 You are a highly specialized Natural Language to SQL (NL2SQL) Parser. 
@@ -100,14 +101,64 @@ Output: {{
 }}
 """
 
-# ---------------------------------------------------------
-# 3. FUNZIONI DEI NODI (Logic del Grafo)
-# ---------------------------------------------------------
+TABLE_SELECTOR_SYSTEM_PROMPT = """
+### ROLE
+You are a Senior Data Architect specialized in SQL and Database routing. 
+Your expertise lies in analyzing Italian natural language queries and selecting the complete subset of tables from a given database schema to answer the query in detail.
 
-async def run_entity_extractor(state: AgentState):
-    """
-    NODO 1: Estrazione Entità, Operazioni e Filtri.
-    """
+### OPERATIONAL CONSTRAINTS
+- INPUT: Italian user query and a Candidate Schema (Tables, Columns, Foreign Keys, Samples).
+- OUTPUT: Strictly valid JSON.
+- LANGUAGE FOR REASONING: English.
+- LANGUAGE FOR TABLE NAMES: Must strictly match the exact names provided in the schema (case-sensitive).
+- NO CONVERSATIONAL FILLERS: Do not add greetings or extra text.
+- THINK STEP BY STEP: Focus heavily on data relationships and table linkages (JOINs) needed to retrieve the requested info.
+
+### SELECTION LOGIC & CRITERIA
+1. **Semantic Matching**: Read all column names, descriptions and samples for each table and column. Do NOT assume a table contains data if you don't see the column. If the user asks for an "address", look for tables with "Via", "Civico", "Comune" (e.g., `Edifici`). 
+2. **Foreign Key Chaining (CRITICAL)**: Bridge tables (e.g., `MobiliLocali`, `MobiliSottoSpeci`) are never enough to get textual details. You MUST follow the `[FK->Table.Column]` annotations to reach the final descriptive table (e.g., `Locali`, `Speci`).
+3. **The ID Rule**: Columns starting with `Id` (e.g., `IdSottoSpecie`) contain ONLY numerical codes. If the user asks for "details", "name", or "description", you CANNOT stop at the ID column. You MUST include the target table.
+4. **Discard Noise**: Ignore tables that were retrieved by the semantic search but are irrelevant to the specific user intent.
+
+### JSON SCHEMA
+{{
+"reasoning": "EXTREMELY SHORT logic (MAX 2-3 SENTENCES). Do not explain discarded tables. Just state the core join path.",
+"central_entity": "The exact name of the main driving table representing the core subject (e.g., 'BeniMobili').",
+"relevant_tables": ["List", "of", "exact", "table", "names"]
+}}
+
+#####FEW-SHOT EXAMPLES#####
+
+Input:
+QUERY: "Dimmi in quali stanze si trovano gli armadi e a che piano sono."
+SCHEMA: [Context with BeniMobili, MobiliLocali, Locali, Edifici, SottoSpeci...]
+Output: {{
+"reasoning": "The core entity is 'BeniMobili' (armadi). The user wants to know the room ('stanze') and the floor ('piano'). Looking at the schema, the floor ('Piano') and room description are in the 'Locali' table. To link 'BeniMobili' to 'Locali', we must traverse the bridge table 'MobiliLocali' using 'IdBeneMobile' and 'IdLocale'. No other tables are needed.",
+"central_entity": "BeniMobili",
+"relevant_tables": ["BeniMobili", "MobiliLocali", "Locali"]
+}}
+
+Input: 
+QUERY: "Quante schede patrimoniali attive abbiamo inserito nel 2019?"
+SCHEMA: [Context with SchedePatrimoniali, TipiValoreInv, Locali...]
+Output: {{
+"reasoning": "The user asks for a count of active patrimonial cards ('schede patrimoniali attive') filtered by insertion year (2019). The 'SchedePatrimoniali' table contains both the 'IsSchedaAttiva' flag and the 'DTInserimento' date. No foreign keys need to be resolved for descriptions.",
+"central_entity": "SchedePatrimoniali",
+"relevant_tables": ["SchedePatrimoniali"]
+}}
+
+Input:
+QUERY: "Quali sono i codici ARCONET dei piani economici usati per le nostre categorie contabili?"
+SCHEMA: [Context with Categorie, PianiEcoStatiPatrimoniali, Locali...]
+Output: {{   
+"reasoning": "The main topic is accounting categories ('Categorie'). To find the ARCONET codes ('codici ARCONET'), we must look at the 'PianiEcoStatiPatrimoniali' table, because 'Categorie' only has an 'IdPianoEcoStatoPatrimoniale' numerical column. We need both tables to resolve the relation.",
+"central_entity": "Categorie",
+"relevant_tables": ["Categorie", "PianiEcoStatiPatrimoniali"]
+}}   
+"""
+
+# node 1: entity, operations, and filters extraction
+async def run_entity_extractor(state: AgentState) -> Dict[str, Any]:
     print(f"🕵️‍♀️ (Entity Extractor) Analisi query: '{state['user_query']}'")
     
     prompt = ChatPromptTemplate.from_messages([
@@ -119,20 +170,18 @@ async def run_entity_extractor(state: AgentState):
     chain = prompt | structured_llm
     
     try:
-        extraction = await chain.ainvoke({"input": state['user_query']})
+        extraction: ExtractionResult = await chain.ainvoke({"input": state['user_query']})
         
-        # Gestione sicura delle liste vuote
-        ops = extraction.operations if extraction.operations else "Nessuna"
-        filtri = extraction.filters if extraction.filters else "Nessuno"
+        # safely handle empty lists
+        ops = extraction.operations if extraction.operations else ["None"]
+        filtri = extraction.filters if extraction.filters else ["None"]
         
-        # Log dettagliato con i nuovi campi richiesti dal prompt
         print(f"   -> 🧠 Ragionamento: {extraction.reasoning}")
         print(f"   -> 🎯 Intento: {extraction.intent}")
         print(f"   -> 🔑 Entità: {extraction.entities}")
         print(f"   -> ⚙️  Operazioni: {ops}")
         print(f"   -> 🗂️  Filtri: {filtri}")
         
-        # Salviamo tutto nello stato usando la sintassi originale a stringa
         return {
             "extraction_result": extraction,
             "messages": [f"Entità: {extraction.entities} | Filtri: {filtri} | Intento: {extraction.intent}"]
@@ -140,10 +189,8 @@ async def run_entity_extractor(state: AgentState):
     except Exception as e:
         return {"error": f"Errore Extractor: {str(e)}"}
 
+# transforms the json schema into an optimized pseudo-markdown format for the llm
 def format_schema_for_llm(schema_list: list) -> str:
-    """
-    Trasforma il JSON in un formato testuale M-Schema/MAC-Schema ottimizzato per l'LLM.
-    """
     formatted_tables = []
     
     for tbl in schema_list:
@@ -154,7 +201,7 @@ def format_schema_for_llm(schema_list: list) -> str:
         cat_vals = tbl.get("categorical_values", "")
         samples = tbl.get("column_samples", {})
         
-        # Mappatura rapida delle FK
+        # quick fk mapping for annotation
         fk_map = {}
         for fk in fks:
             from_col = fk.get("from_column")
@@ -164,23 +211,21 @@ def format_schema_for_llm(schema_list: list) -> str:
                 target = f"{to_tbl}.{to_col}" if to_col else to_tbl
                 fk_map[from_col] = target
                 
-        # Costruiamo la tupla di colonne con annotazioni FK ed ESEMPI
+        # build column strings with fk annotations and data samples
         col_tuples = []
         for col in cols:
             col_str = col
-            # 1. Aggiungiamo la FK se esiste
             if col in fk_map:
                 col_str += f" [FK->{fk_map[col]}]"
             
-            # 2. Aggiungiamo gli esempi se esistono
             if col in samples and samples[col]:
-                # Pulizia valori per evitare "a capo" accidentali che rompono il layout
+                # clean up newlines to prevent markdown layout breakage
                 safe_samples = [str(s).replace('\n', ' ').replace('\r', '') for s in samples[col]]
                 col_str += f" (Esempi: {', '.join(safe_samples)})"
                 
             col_tuples.append(col_str)
                 
-        # Formattazione Pseudo-Markdown
+        # format as pseudo-markdown
         tbl_md = f"### Tabella: {name}\n"
         if desc: 
             tbl_md += f"Descrizione: {desc}\n"
@@ -192,160 +237,90 @@ def format_schema_for_llm(schema_list: list) -> str:
         
     return "\n\n".join(formatted_tables)
 
-
-async def run_table_selector(state: AgentState):
-    """
-    NODO 2: Ottimizzato per ricerca vettoriale pulita e gestione dipendenze.
-    """
+# node 2: llm table selection based on semantic search and graph auto-filler
+async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     print("🔍 (Table Selector) Ricerca tabelle...")
     
     extraction = state.get("extraction_result")
     
-    # --- A. PREPARAZIONE QUERY VETTORIALE ---
+    # vector query preparation
     if extraction and extraction.entities:
-        # HYBRID QUERY: Domanda originale (per il contesto semantico) + Entità (per il boost delle keyword)
+        # hybrid query combining original question and entities for keyword boost
         entities_str = " ".join(extraction.entities)
         vector_search_query = f"{state['user_query']} {entities_str}"
     else:
-        # Fallback sulla query intera se non ci sono entità
+        # fallback to the full query
         vector_search_query = state["user_query"]
         
     print(f"   Testo usato per Chroma: '{vector_search_query}'")
-
-    # Formattiamo le operazioni per il prompt
-    # Fix per evitare crash se extraction è None
-    if extraction and extraction.operations:
-         ops_str = ", ".join(extraction.operations)
-    else:
-         ops_str = "None (Simple SELECT)"
     
-    # --- B. RETRIEVAL (Tool) ---
+    # schema retrieval via chromadb tool
     try:
-        # Recuperiamo un numero generoso di tabelle (es. 10-15) per avere contesto
+        # retrieve generous number of tables to provide context
         schema_json = search_schema_tool.invoke({"query": vector_search_query, "k": 10})
     except Exception as e:
         return {"error": f"Errore Chroma: {str(e)}"}
     
-    # --- DEBUG E CONVERSIONE ---
-    
+    # parsing and markdown generation
     try:
         schema_list = json.loads(schema_json) if schema_json else []
         candidate_tables = [t.get("table_name") or t.get("table") for t in schema_list if t.get("table_name") or t.get("table")]
         print(f"📦 (Table Selector) Candidate tables passate all'Agente 2: {len(candidate_tables)}")
         
-        # 🔥 CREIAMO IL MARKDOWN PER L'LLM
         schema_markdown = format_schema_for_llm(schema_list)
-        # 🔥 DEBUG: Salviamo il markdown in un file per poterlo ispezionare!
+        
+        # save markdown payload for debugging
         with open("debug_schema_markdown.md", "w", encoding="utf-8") as f:
             f.write(schema_markdown)
         print("💾 Markdown passato all'LLM salvato in 'debug_schema_markdown.md'")
         
     except Exception as _e:
         print(f"⚠️ (Table Selector) Impossibile parsare schema_json: {_e}")
-        schema_markdown = schema_json # Fallback di emergenza
+        # emergency fallback to raw json string
+        schema_markdown = schema_json  
         schema_list = []
     
-    # --- C. SELECTION (LLM) ---
+    # llm selection
     print("🧠 (Table Selector) Filtering intelligente...")
     
-    selector_prompt = """
-    ### ROLE
-    You are a Senior Data Architect specialized in SQL and Database routing. 
-    Your expertise lies in analyzing Italian natural language queries and selecting the complete subset of tables from a given database schema to answer the query in detail.
-
-    ### OPERATIONAL CONSTRAINTS
-    - INPUT: Italian user query and a Candidate Schema (Tables, Columns, Foreign Keys, Samples).
-    - OUTPUT: Strictly valid JSON.
-    - LANGUAGE FOR REASONING: English.
-    - LANGUAGE FOR TABLE NAMES: Must strictly match the exact names provided in the schema (case-sensitive).
-    - NO CONVERSATIONAL FILLERS: Do not add greetings or extra text.
-    - THINK STEP BY STEP: Focus heavily on data relationships and table linkages (JOINs) needed to retrieve the requested info.
-
-    ### SELECTION LOGIC & CRITERIA
-    1. **Semantic Matching**: Read all column names, descriptions and samples for each table and column. Do NOT assume a table contains data if you don't see the column. If the user asks for an "address", look for tables with "Via", "Civico", "Comune" (e.g., `Edifici`). 
-    2. **Foreign Key Chaining (CRITICAL)**: Bridge tables (e.g., `MobiliLocali`, `MobiliSottoSpeci`) are never enough to get textual details. You MUST follow the `[FK->Table.Column]` annotations to reach the final descriptive table (e.g., `Locali`, `Speci`).
-    3. **The ID Rule**: Columns starting with `Id` (e.g., `IdSottoSpecie`) contain ONLY numerical codes. If the user asks for "details", "name", or "description", you CANNOT stop at the ID column. You MUST include the target table.
-    4. **Discard Noise**: Ignore tables that were retrieved by the semantic search but are irrelevant to the specific user intent.
-
-    ### JSON SCHEMA
-    {{
-    "reasoning": "Step-by-step logic in English detailing why each table was chosen and how they connect via FKs to answer the user query.",
-    "central_entity": "The exact name of the main driving table representing the core subject (e.g., 'BeniMobili').",
-    "relevant_tables": ["List", "of", "exact", "table", "names"]
-    }}
-
-    #####FEW-SHOT EXAMPLES#####
-
-    Input:
-    QUERY: "Dimmi in quali stanze si trovano gli armadi e a che piano sono."
-    SCHEMA: [Context with BeniMobili, MobiliLocali, Locali, Edifici, SottoSpeci...]
-    Output: {{
-    "reasoning": "The core entity is 'BeniMobili' (armadi). The user wants to know the room ('stanze') and the floor ('piano'). Looking at the schema, the floor ('Piano') and room description are in the 'Locali' table. To link 'BeniMobili' to 'Locali', we must traverse the bridge table 'MobiliLocali' using 'IdBeneMobile' and 'IdLocale'. No other tables are needed.",
-    "central_entity": "BeniMobili",
-    "relevant_tables": ["BeniMobili", "MobiliLocali", "Locali"]
-    }}
-
-    Input: 
-    QUERY: "Quante schede patrimoniali attive abbiamo inserito nel 2019?"
-    SCHEMA: [Context with SchedePatrimoniali, TipiValoreInv, Locali...]
-    Output: {{
-    "reasoning": "The user asks for a count of active patrimonial cards ('schede patrimoniali attive') filtered by insertion year (2019). The 'SchedePatrimoniali' table contains both the 'IsSchedaAttiva' flag and the 'DTInserimento' date. No foreign keys need to be resolved for descriptions.",
-    "central_entity": "SchedePatrimoniali",
-    "relevant_tables": ["SchedePatrimoniali"]
-    }}
-
-    Input:
-    QUERY: "Quali sono i codici ARCONET dei piani economici usati per le nostre categorie contabili?"
-    SCHEMA: [Context with Categorie, PianiEcoStatiPatrimoniali, Locali...]
-    Output: {{   
-    "reasoning": "The main topic is accounting categories ('Categorie'). To find the ARCONET codes ('codici ARCONET'), we must look at the 'PianiEcoStatiPatrimoniali' table, because 'Categorie' only has an 'IdPianoEcoStatoPatrimoniale' numerical column. We need both tables to resolve the relation.",
-    "central_entity": "Categorie",
-    "relevant_tables": ["Categorie", "PianiEcoStatiPatrimoniali"]
-    }}   
-
-    """
-    
     prompt = ChatPromptTemplate.from_messages([
-        ("system", selector_prompt),
-        ("human", "### EXECUTION\nQUERY: {query}\nSCHEMA:\n{schema}\n\nOutput:")
+        ("system", TABLE_SELECTOR_SYSTEM_PROMPT),
+        ("human", "### EXECUTION\nQUERY: {query}\nSCHEMA:\n{schema}n\nOutput:")
     ])
+    
     structured_llm = llm.with_structured_output(TableSelectionResult)
     chain = prompt | structured_llm
     
     try:
-        result = await chain.ainvoke({
+        result: TableSelectionResult = await chain.ainvoke({
             "schema": schema_markdown,
-            "query": state["user_query"],
-            #"intent": extraction.intent if extraction else "Generic",
-            #"operations": ops_str
+            "query": state["user_query"]
         })
         
-        # 1. Prendiamo la selezione "umana" dell'LLM
+        # 1. base llm selection
         llm_selection = result.relevant_tables
         
-        # 2. Applichiamo l'Auto-Filler topologico
-        #    Questo aggiungerà 'ValoriInv' se l'LLM ha scelto solo 'BeniMobili' e 'TipiValoreInv'
+        # 2. topological auto-filler to add missing bridge tables
         final_selection = expand_selection_with_graph(
             llm_selection,
             schema_json,
             root_table_real=result.central_entity
         )
         
-        # 3. Calcoliamo cosa è stato aggiunto (per log/debug)
+        # 3. calculate additions for debugging
         added_tables = set(final_selection) - set(llm_selection)
-        
         reasoning_log = result.reasoning
+        
         if added_tables:
             msg_autofix = f"\n🤖 [AUTO-FIX] Il sistema ha aggiunto tabelle ponte mancanti: {list(added_tables)}"
             reasoning_log += msg_autofix
             print(msg_autofix)
          
-        # Loggare il ragionamento è fondamentale per il debug
         log_msg = f"✅ Tabelle Selezionate: {final_selection}\n🤔 Ragionamento: {reasoning_log}"
         
         return {
             "selected_tables": final_selection,
-            "candidate_tables_schema": schema_json, # Utile tenerlo nello stato per debug
+            "candidate_tables_schema": schema_json,
             "messages": [log_msg]
         }
         

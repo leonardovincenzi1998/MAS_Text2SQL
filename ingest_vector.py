@@ -3,70 +3,74 @@ import json
 import argparse
 import asyncio
 import os
-from typing import List, Dict, Any
-from src.embedding_factory import get_shared_embedding_function
+from typing import List, Dict, Any, Tuple, Set
 import chromadb
 from pydantic_ai import Agent
 from src.embedding_factory import get_chroma_embedding_function
-# Assumiamo che questi moduli esistano nel tuo progetto
 from src.database import DatabaseManager
-from src.config import get_model
-from src.naming import get_canonical_name
+from src.utils import get_canonical_name
+from pydantic_ai.models.openai import OpenAIChatModel
 
-# --- CONFIGURAZIONE ---
+LLM_MODEL_NAME = 'Qwen/Qwen2.5-32B-Instruct-AWQ' 
+BASE_URL = 'http://localhost:8000/v1'
+API_KEY = 'EMPTY'
+
+# configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB_PATH = os.path.join(BASE_DIR, "cloneDefinitivoDB.db")
 DEFAULT_CHROMA_PATH = os.path.join(BASE_DIR, "chroma_db_data")
 COLLECTION_NAME = "langchain"
 
-# --- PROMPT AVANZATO ---
+# agent prompt in english with strict italian output constraint
 DESCRIPTION_AGENT_PROMPT = """
-Sei un esperto Data Steward e Database Administrator.
-Il tuo compito è generare una documentazione semantica ricca per una tabella SQL, ottimizzata per la ricerca vettoriale (RAG).
+You are an expert Data Steward and Database Administrator.
+Your task is to generate rich semantic documentation for a SQL table, optimized for Vector Search (RAG).
 
-Riceverai:
-1. Il DDL della tabella (Create Table).
-2. Un'analisi statistica dei dati (campioni e valori categorici rilevati).
+You will receive:
+1. The table's DDL (Create Table).
+2. A statistical data analysis (samples and detected categorical values).
 
-Devi produrre una descrizione discorsiva in ITALIANO che spieghi:
-1. **L'Entità Principale**: Cosa rappresenta la tabella nel mondo reale (es. "Ordini clienti", "Prodotti a magazzino").
-2. **Le Colonne Chiave**: Descrivi le colonne basandoti sui dati forniti.
-3. **Vocabolario Specifico**: Se l'analisi mostra valori categorici (es. status = 'shipped', 'pending'), ELENCALI ESPLICITAMENTE. Questo è fondamentale per permettere al sistema di mappare le domande dell'utente sui valori corretti.
-4. **Relazioni**: Se intuisci chiavi esterne (es. `client_id`), menziona che la tabella collega questa entità ai clienti.
+You must produce a discursive description that explains:
+1. **The Main Entity**: What the table represents in the real world (e.g., "Customer Orders", "Warehouse Products").
+2. **Key Columns**: Describe the columns based on the provided data.
+3. **Specific Vocabulary**: If the analysis shows categorical values (e.g., status = 'shipped', 'pending'), EXPLICITLY LIST THEM. This is crucial to allow the system to map user questions to the correct values.
+4. **Relationships**: If you infer foreign keys (e.g., `client_id`), mention that the table links this entity to clients.
 
-OUTPUT RICHIESTO: Solamente il testo della descrizione, senza preamboli o markdown extra.
+CRITICAL REQUIREMENT: The final generated description MUST be strictly in ITALIAN. Output ONLY the description text, without preambles or extra markdown.
 """
 
-def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95, threshold_cardinality=1) -> tuple[str, list[str], dict]:
-    """
-    Analisi intelligente delle colonne per identificare quelle significative da includere nella descrizione:
-    - Protegge PK/FK.
-    - Scarta colonne sparse o costanti.
-    - Rileva categorie (Ratio Check),
-      evitando di listare nomi o codici univoci in tabelle piccole.
-    """
+def analyze_columns_smart(
+    db_path: str, 
+    table_name: str, 
+    threshold_sparsity: float = 0.95, 
+    threshold_cardinality: int = 1
+) -> Tuple[str, List[str], Dict[str, List[str]]]:
+    # intelligent column analysis to identify significant columns for the LLM description
+    # protects PKs/FKs, discards highly sparse or constant columns
+    # detects categorical features (ratio check) to avoid listing unique IDs
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
-    report_lines = []
-    kept_columns = []
-    dropped_columns = []
-    categorical_hints = []
+    report_lines: List[str] = []
+    kept_columns: List[str] = []
+    dropped_columns: List[str] = []
+    categorical_hints: List[str] = []
+    column_samples: Dict[str, List[str]] = {}
     
     try:
-        # 1. Identifica PK e FK
+        # 1. identify PK and FK sets
         cursor.execute(f"PRAGMA table_info({table_name})")
         cols_info = cursor.fetchall()
-        pk_list = {row['name'] for row in cols_info if row['pk'] > 0}
+        pk_list: Set[str] = {row['name'] for row in cols_info if row['pk'] > 0}
         
         safe_table = table_name.replace('"', '""')
         cursor.execute(f'PRAGMA foreign_key_list("{safe_table}")')
-        fk_list = {row['from'] for row in cursor.fetchall()}
+        fk_list: Set[str] = {row['from'] for row in cursor.fetchall()}
         
         structural_cols = pk_list.union(fk_list)
 
-        # 2. Analisi Colonne
+        # 2. column analysis
         for col in cols_info:
             col_name = col['name']
             col_type = col['type'].upper()
@@ -74,7 +78,7 @@ def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95
             
             is_structural = col_name in structural_cols
             
-            # Query Statistica
+            # formulate query based on numeric vs text types
             if any(x in col_type for x in ['INT', 'REAL', 'NUM', 'DEC', 'FLOAT', 'DOUBLE']):
                 empty_condition = f"{safe_col} IS NULL OR {safe_col} = 0"
             else:
@@ -97,7 +101,7 @@ def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95
             
             sparsity = (empty / total) if total > 0 else 1.0
             
-            # Logica DROP/KEEP
+            # drop or keep logic
             keep = False
             if total == 0:
                 keep = False
@@ -113,14 +117,11 @@ def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95
             if keep:
                 kept_columns.append(col_name)
                 
-                # --- NUOVA LOGICA CATEGORIE (Ratio Check) ---
+                # new category logic via ratio check
                 is_text = ("CHAR" in col_type or "TEXT" in col_type)
                 not_pk = col_name not in pk_list
                 few_distinct = 0 < distinct <= 25
                 
-                # Regola: 
-                # O sono pochissimi in assoluto (<= 5) -> Es. flag booleani
-                # O sono pochi rispetto al totale delle righe (< 50%) -> Es. Categorie vere
                 is_true_category = distinct <= 5 or (distinct < total * 0.5)
 
                 if is_text and not_pk and few_distinct and is_true_category:
@@ -130,13 +131,13 @@ def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95
                         if vals:
                             vals_str = ", ".join(vals)
                             categorical_hints.append(f"- Colonna '{col_name}' ({len(vals)} val): [{vals_str}]")
-                    except:
+                    except Exception:
                         pass
             else:
                 if not is_structural:
                     dropped_columns.append(col_name)
 
-        # 3. Costruzione Report
+        # 3. report construction
         if categorical_hints:
             report_lines.append("--- VALORI CATEGORICI RILEVATI ---")
             report_lines.extend(categorical_hints)
@@ -144,14 +145,11 @@ def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95
 
         if dropped_columns:
             drop_str = ", ".join(dropped_columns[:20]) 
-            if len(dropped_columns) > 20: drop_str += "..."
-            report_lines.append(f"⚠️ COLONNE IGNORATE (Vuote/Costanti): {drop_str}")
-            report_lines.append("")
+            if len(dropped_columns) > 20: 
+                drop_str += "..."
+            report_lines.append(f"⚠️ COLONNE IGNORATE (Vuote/Costanti): {drop_str}\n")
 
-        column_samples = {}
-        
         if kept_columns:
-            # Estraiamo i sample da passare strutturati al RAG
             cols_query = ", ".join([f'"{c}"' for c in kept_columns])
             cursor.execute(f'SELECT {cols_query} FROM "{safe_table}" LIMIT 20')
             rows = cursor.fetchall()
@@ -160,14 +158,13 @@ def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95
                 samples = set()
                 for row in rows:
                     val = row[col]
-                    # Scartiamo i null e limitiamo la lunghezza a 40 char per non esplodere i token
+                    # discard nulls and limit length to 40 chars to save tokens
                     if val is not None and str(val).strip() != '':
                         samples.add(str(val)[:40]) 
                 
                 if samples:
-                    column_samples[col] = list(samples)[:3] # Prendiamo massimo 3 valori diversi
+                    column_samples[col] = list(samples)[:3] 
 
-            # Aggiungiamo anche le righe grezze al report per l'Agent 1 (opzionale)
             report_lines.append("--- CAMPIONE DATI ---")
             for row in rows[:3]:
                 report_lines.append(str(dict(row)))
@@ -181,11 +178,12 @@ def analyze_columns_smart(db_path: str, table_name: str, threshold_sparsity=0.95
     
     return "\n".join(report_lines), kept_columns, column_samples
 
-def get_foreign_keys_robust(db_path: str, table_name: str) -> List[Dict]:
+
+def get_foreign_keys_robust(db_path: str, table_name: str) -> List[Dict[str, str]]:
+    # retrieves foreign keys using SQLite PRAGMA function
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # quoting per SQLite
     safe_table = table_name.replace('"', '""')
     cursor.execute(f'PRAGMA foreign_key_list("{safe_table}")')
     fks = cursor.fetchall()
@@ -203,10 +201,15 @@ def get_foreign_keys_robust(db_path: str, table_name: str) -> List[Dict]:
     return results
 
 
-async def process_single_table(db_manager, db_path, table_name, collection, agent, semaphore):
-    """
-    Processa una singola tabella: Estrazione -> Generazione -> Salvataggio
-    """
+async def process_single_table(
+    db_manager: Any, 
+    db_path: str, 
+    table_name: str, 
+    collection: Any, 
+    agent: Agent, 
+    semaphore: asyncio.Semaphore
+) -> bool:
+    # processes a single table pipeline: DDL Extraction -> Smart Profiling -> LLM Description -> ChromaDB Upsert
     print(f"   ⏳ Analisi tabella: {table_name}...")
     
     try:
@@ -214,32 +217,35 @@ async def process_single_table(db_manager, db_path, table_name, collection, agen
             real_table_name = table_name
             canonical_name = get_canonical_name(real_table_name)
             
-            # Estrazione FK e DDL
+            # phase a: extract FKs and DDL
             foreign_keys = get_foreign_keys_robust(db_path, real_table_name)
             ddl = db_manager.get_table_ddl(real_table_name)
 
-            # B. Analisi SMART (Sostituisce quella vecchia euristica)
-            # Rileva PK/FK, pulisce colonne vuote/costanti e genera statistiche
-            stats_text, significant_cols, column_samples = await asyncio.to_thread(analyze_columns_smart, db_path, real_table_name)
+            # phase b: smart data profiling
+            stats_text, significant_cols, column_samples = await asyncio.to_thread(
+                analyze_columns_smart, db_path, real_table_name
+            )
 
-            # C. Generazione Descrizione con LLM
+            # phase c: generate LLM description
             user_content = f"--- DDL TABELLA ---\n{ddl}\n\n{stats_text}"
             result = await agent.run(user_content)
-            description = result.output # Nota: Adattato a result.data come da PydanticAI recente (o result.output a seconda della versione)
+            
+            # handle PydanticAI version differences
+            description = getattr(result, "data", getattr(result, "output", str(result)))
         
-            # D. Preparazione Metadata per tools.py
+            # phase d: prepare metadata payload for the RAG retriever (tools.py)
             metadata_payload = {
-                "real_table_name": real_table_name,  # nuovo standard
+                "real_table_name": real_table_name,
                 "significant_cols": significant_cols,
                 "canonical_name": canonical_name,
                 "foreign_keys": foreign_keys,
                 "original_ddl": ddl,
                 "generated_description": description,
-                "data_profile": stats_text,           # Qui c'è il report 'Smart'
-                "column_samples": column_samples      # Campioni per ogni colonna significativa
+                "data_profile": stats_text,
+                "column_samples": column_samples
             }
 
-            # E. Inserimento nel Vector DB
+            # phase e: vector DB upsert
             rich_document = f"""
             DESCRIZIONE SEMANTICA:
             {description}
@@ -254,8 +260,6 @@ async def process_single_table(db_manager, db_path, table_name, collection, agen
             collection.upsert(
                 documents=[rich_document],
                 metadatas=[{
-                    #"table_name": real_table_name,      # compatibilità
-                    #"real_table_name": real_table_name,
                     "canonical_name": canonical_name,
                     "table_schema": json.dumps(metadata_payload)
                 }],
@@ -269,9 +273,22 @@ async def process_single_table(db_manager, db_path, table_name, collection, agen
         print(f"   ❌ ERRORE su tabella '{table_name}': {e}")
     return False
 
+
+def get_model():
+    # configures the model by setting environment variables
+    # this method is safe because it bypasses syntax differences between library versions
+    
+    # 1. set environment variables that the internal 'openai' library listens to
+    os.environ['OPENAI_BASE_URL'] = BASE_URL
+    os.environ['OPENAI_API_KEY'] = API_KEY
+
+    # 2. initialize the model passing ONLY the name
+    return OpenAIChatModel(model_name=LLM_MODEL_NAME)
+
+
 async def main():
-    # --- 1. Setup ---
-    parser = argparse.ArgumentParser()
+    # argument setup
+    parser = argparse.ArgumentParser(description="Ingest DB schema into Chroma Vector Database")
     parser.add_argument("--db_path", default=os.getenv("DB_PATH", DEFAULT_DB_PATH))
     parser.add_argument("--chroma_path", default=os.getenv("CHROMA_PATH", DEFAULT_CHROMA_PATH))
     args = parser.parse_args()
@@ -283,31 +300,31 @@ async def main():
     print("🔌 Connessione ai sistemi...")
     db_manager = DatabaseManager(args.db_path)
     
-    # Setup Chroma
+    # chromadb setup
     print("🧠 Caricamento Modello Enterprise (BGE-M3)...")
     emb_fn = get_chroma_embedding_function()
 
     chroma_client = chromadb.PersistentClient(path=args.chroma_path)
 
-    # Reset pulito (opzionale: commenta se vuoi fare upsert incrementale)
-    try: chroma_client.delete_collection(COLLECTION_NAME)
-    except: pass
+    # optional clean reset
+    try: 
+        chroma_client.delete_collection(COLLECTION_NAME)
+    except Exception: 
+        pass
     
     collection = chroma_client.get_or_create_collection(
         name=COLLECTION_NAME, embedding_function=emb_fn
     )
 
-    # Setup Agente
     agent = Agent(model=get_model(), system_prompt=DESCRIPTION_AGENT_PROMPT)
 
-    # --- 2. Discovery ---
+    # discovery and execution
     tables = db_manager.search_tables(None)
     print(f"🚀 Trovate {len(tables)} tabelle. Inizio arricchimento parallelo...")
 
     max_conc = int(os.getenv("INGEST_MAX_CONCURRENCY", "4"))
     semaphore = asyncio.Semaphore(max(1, max_conc))
 
-    # --- 3. Esecuzione Parallela ---
     tasks = [
         process_single_table(db_manager, args.db_path, table, collection, agent, semaphore)
         for table in tables
