@@ -58,7 +58,7 @@ WHERE mc.dal >= '1900-01-01 00:00:00'
 
 
 3)Controllo caricamento beni (idQuery: 40)
-Domanda:Voglio la descrizione dei beni mobili, con il codice della specie e sottospecie, e in quale locale ed edficio si trovano, con il tipo etichetta uguale a "F" e le informazioni su lotto e tipo di etichetta
+Domanda:Voglio la descrizione dei beni mobili, della specie e sottospecie, e in quale locale ed edficio si trovano, con il tipo etichetta uguale a "F" e le informazioni su lotto e tipo di etichetta
 SELECT
     LottoEtichetta,
     TipoEtichetta,

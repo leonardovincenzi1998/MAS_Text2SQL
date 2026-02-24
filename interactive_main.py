@@ -3,6 +3,8 @@ import asyncio
 import os
 import sys
 from langchain_core.messages import HumanMessage
+import warnings
+warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
 
 # Configurazione default (fallback se non passato da argomenti)
 DEFAULT_DB_PATH = "cloneDefinitivoDB.db" 

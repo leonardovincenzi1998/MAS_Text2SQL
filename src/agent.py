@@ -82,6 +82,52 @@ async def run_entity_extractor(state: AgentState):
         return {"error": f"Errore Extractor: {str(e)}"}
 
 
+def format_schema_for_llm(schema_list: list) -> str:
+    """
+    Trasforma il JSON in un formato testuale M-Schema/MAC-Schema ottimizzato per l'LLM.
+    """
+    formatted_tables = []
+    
+    for tbl in schema_list:
+        name = tbl.get("table_name") or tbl.get("table", "Unknown")
+        desc = tbl.get("description", tbl.get("desc", ""))
+        cols = tbl.get("columns", [])
+        fks = tbl.get("foreign_keys", [])
+        cat_vals = tbl.get("categorical_values", "")
+        
+        # Mappatura rapida delle FK per annotare le colonne
+        fk_map = {}
+        for fk in fks:
+            from_col = fk.get("from_column")
+            to_tbl = fk.get("to_table_real") or fk.get("to_table_canonical")
+            to_col = fk.get("to_column") # <-- AGGIUNTA
+            
+            if from_col and to_tbl:
+                # Se abbiamo anche la colonna target, la aggiungiamo (Tabella.Colonna)
+                target = f"{to_tbl}.{to_col}" if to_col else to_tbl
+                fk_map[from_col] = target
+                
+        # Costruiamo la tupla di colonne con annotazioni FK
+        col_tuples = []
+        for col in cols:
+            if col in fk_map:
+                col_tuples.append(f"{col} [FK->{fk_map[col]}]")
+            else:
+                col_tuples.append(col)
+                
+        # Formattazione Pseudo-Markdown
+        tbl_md = f"### Tabella: {name}\n"
+        if desc: 
+            tbl_md += f"Descrizione: {desc}\n"
+        tbl_md += f"Colonne: ( {', '.join(col_tuples)} )\n"
+        if cat_vals: 
+            tbl_md += f"Valori Notevoli:\n{cat_vals}\n"
+            
+        formatted_tables.append(tbl_md)
+        
+    return "\n\n".join(formatted_tables)
+
+
 async def run_table_selector(state: AgentState):
     """
     NODO 2: Ottimizzato per ricerca vettoriale pulita e gestione dipendenze.
@@ -99,7 +145,6 @@ async def run_table_selector(state: AgentState):
         # Fallback sulla query intera se non ci sono entità
         vector_search_query = state["user_query"]
 
-
     # Formattiamo le operazioni per il prompt
     # Fix per evitare crash se extraction è None
     if extraction and extraction.operations:
@@ -114,21 +159,24 @@ async def run_table_selector(state: AgentState):
     except Exception as e:
         return {"error": f"Errore Chroma: {str(e)}"}
     
-    # --- DEBUG: elenco completo tabelle candidate passate all'Agente 2 ---
+    # --- DEBUG E CONVERSIONE ---
+    
     try:
         schema_list = json.loads(schema_json) if schema_json else []
-        candidate_tables = []
-        for t in schema_list:
-            name = t.get("table") or t.get("table_name")
-            if name:
-                candidate_tables.append(name)
+        candidate_tables = [t.get("table_name") or t.get("table") for t in schema_list if t.get("table_name") or t.get("table")]
         print(f"📦 (Table Selector) Candidate tables passate all'Agente 2: {len(candidate_tables)}")
-        print(f"📋 Candidate list: {candidate_tables}")
+        
+        # 🔥 CREIAMO IL MARKDOWN PER L'LLM
+        schema_markdown = format_schema_for_llm(schema_list)
+        # 🔥 DEBUG: Salviamo il markdown in un file per poterlo ispezionare!
+        with open("debug_schema_markdown.md", "w", encoding="utf-8") as f:
+            f.write(schema_markdown)
+        print("💾 Markdown passato all'LLM salvato in 'debug_schema_markdown.md'")
+        
     except Exception as _e:
-        print(f"⚠️ (Table Selector) Impossibile parsare schema_json per debug candidate tables: {_e}")
-
-
-
+        print(f"⚠️ (Table Selector) Impossibile parsare schema_json: {_e}")
+        schema_markdown = schema_json # Fallback di emergenza
+        schema_list = []
     
     # --- C. SELECTION (LLM) ---
     print("🧠 (Table Selector) Filtering intelligente...")
@@ -137,7 +185,7 @@ async def run_table_selector(state: AgentState):
     Sei un Senior Data Architect specializzato in SQL.
     
     OBIETTIVO:
-    Seleziona le tabelle necessarie per rispondere alla domanda dell'utente.
+    Seleziona le tabelle necessarie per rispondere in modo dettagliato alla domanda dell'utente.
     
     INPUT:
     1. DOMANDA: "{query}"
@@ -145,9 +193,10 @@ async def run_table_selector(state: AgentState):
     {schema}
     
     ISTRUZIONI CRITICHE:
-    1. **Analisi Semantica**: Usa le descrizioni delle tabelle per capire se contengono i dati richiesti.
+    1. **Analisi Semantica**: Usa le descrizioni e i nomi delle colonne delle tabelle per capire se contengono i dati richiesti.
     2. **Analisi Relazionale (Join)**: Se selezioni una tabella che usa una Foreign Key (es. `client_id`) per collegarsi a un concetto citato nella domanda (es. "Nome Cliente"), DEVI selezionare anche la tabella riferita se è presente nella lista.
     3. **Scarta il Rumore**: Se una tabella è stata recuperata ma non c'entra nulla con la domanda (es. tabella 'Log' per una domanda di vendita), scartala.
+    4. **Colonne ID**: Le colonne che iniziano per `Id` contengono SOLO codici numerici che l'utente non può interpretare. NON puoi fermarti alla colonna ID, DEVI obbligatoriamente selezionare la tabella di destinazione seguendo la `[FK->...]` per recuperare i campi descrittivi.
     
     OUTPUT:
     Restituisci la lista delle tabelle scelte e una breve spiegazione del perché (es. "Scelgo `Orders` per gli importi e `Customers` per filtrare per nome").
@@ -159,10 +208,10 @@ async def run_table_selector(state: AgentState):
     
     try:
         result = await chain.ainvoke({
-            "schema": schema_json,
+            "schema": schema_markdown,
             "query": state["user_query"],
-            "intent": extraction.intent if extraction else "Generic",
-            "operations": ops_str
+            #"intent": extraction.intent if extraction else "Generic",
+            #"operations": ops_str
         })
         
         # 1. Prendiamo la selezione "umana" dell'LLM
@@ -178,7 +227,7 @@ async def run_table_selector(state: AgentState):
         
         # 3. Calcoliamo cosa è stato aggiunto (per log/debug)
         added_tables = set(final_selection) - set(llm_selection)
-
+        
         reasoning_log = result.reasoning
         if added_tables:
             msg_autofix = f"\n🤖 [AUTO-FIX] Il sistema ha aggiunto tabelle ponte mancanti: {list(added_tables)}"
