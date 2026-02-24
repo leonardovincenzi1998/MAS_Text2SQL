@@ -12,8 +12,8 @@ class ExtractionResult(BaseModel):
     Identifica l'intento dell'utente, le entità chiave e le operazioni richieste.
     """
     intent: str = Field(..., description="Una descrizione concisa dell'obiettivo di recupero informazioni dell'utente.")
-    entities: List[str] = Field(..., description="Lista di entità tangibili o nominate (es. luoghi, nomi tabelle, soggetti tematici).")
-    operations: List[str] = Field(..., description="Lista di parole o frasi che descrivono operazioni analitiche o logiche (es. 'media', 'vicino a', 'conta').")
+    entities: List[str] = Field(default_factory=list, description="Lista di entità tangibili o nominate (es. luoghi, nomi tabelle, soggetti tematici).")
+    operations: List[str] = Field(default_factory=list, description="Lista di parole o frasi che descrivono operazioni analitiche o logiche da tradurre in linguaggio SQLite (es. 'MEAN', 'AVG', 'COUNT','MAX').")
 
 #Modello di output atteso dall'LLM per la selezione delle tabelle
 class TableSelectionResult(BaseModel):
@@ -27,9 +27,8 @@ class TableSelectionResult(BaseModel):
         description="Spiegazione logica. Specifica quali tabelle usi per i dati e quali per i filtri/join."
     )
     # 3. Selezione: L'output effettivo.
-    relevant_tables: List[str] = Field(
-        description="Lista esatta dei nomi delle tabelle selezionate (inclusi i ponti necessari)."
-    )
+    relevant_tables: List[str] = Field(default_factory=list, description="Lista esatta dei nomi delle tabelle selezionate (inclusi i ponti necessari).")
+    
     # 4. Metadata: Utile per logica condizionale nel grafo (es. chiedere chiarimenti).
     is_ambiguous: bool = Field(
         default=False,

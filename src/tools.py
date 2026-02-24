@@ -122,7 +122,7 @@ def search_schema_tool(query: str, k: int = 10) -> str:
         with open("debug_payload_v2.json", "w", encoding="utf-8") as f:
             f.write(json_output)
         print("💾 Payload V2 salvato in 'debug_payload_v2.json'")
-        
+
         return json_output
 
     except Exception as e:
@@ -138,10 +138,8 @@ def _process_single_doc(doc, schema_map, tables_to_fetch):
 
 def _parse_and_add_to_map(raw_json_str, schema_map, tables_to_fetch=None):
     """
-    HYBRID PARSER:
-    1. Usa i Smart Hints (Valori Categorici).
-    2. Usa il Regex Fallback per le FK (per trovare le tabelle nascoste).
-    3. Tronca le descrizioni (per evitare il crash LLM).
+    HYBRID PARSER DEFINITIVO:
+    Mantiene le FK ricche (con colonne) e integra le FK implicite trovate via Regex.
     """
     try:
         full_data = json.loads(raw_json_str)
@@ -152,53 +150,53 @@ def _parse_and_add_to_map(raw_json_str, schema_map, tables_to_fetch=None):
         tbl_canon = get_canonical_name(str(tbl_name))
         if tbl_canon in schema_map: return
 
-        # --- 1. GESTIONE FK (LA PARTE CHE MANCAVA) ---
-        # Prima proviamo i metadati puliti
+        # --- 1. GESTIONE FK: UNIONE JSON + REGEX ---
         fk_list = full_data.get("foreign_keys", [])
-        referenced = set()
         
-        # Aggiungiamo da JSON
-        for fk in fk_list:
-            target = fk.get("to_table_canonical")
-            if target: referenced.add(target)
-
-        # POI IL FALLBACK REGEX (Cruciale!)
+        # Raccogliamo i target già noti dai metadati
+        existing_targets = {fk.get("to_table_canonical") for fk in fk_list if fk.get("to_table_canonical")}
+        
+        # Usiamo il fallback Regex sul DDL per trovare relazioni sfuggite
         ddl = full_data.get("original_ddl", "")
         regex_refs = _extract_referenced_tables(ddl)
-        referenced.update(regex_refs)
+        
+        # Aggiungiamo eventuali FK trovate dalla regex che non erano nei metadati
+        for ref in regex_refs:
+            if ref not in existing_targets:
+                fk_list.append({
+                    "to_table_canonical": ref,
+                    "to_table_real": ref,  
+                    "from_column": "inferita_da_ddl",
+                    "to_column": "id"
+                })
+                existing_targets.add(ref)
 
-        # Aggiorniamo la lista globale di espansione
+        # Aggiorniamo la lista globale di espansione per far scaricare a Chroma i vicini
         if tables_to_fetch is not None:
-            tables_to_fetch.update(referenced)
+            tables_to_fetch.update(existing_targets)
 
 
         # --- 2. GESTIONE CONTENUTO (DIETA PER LLM) ---
-        
-        # Colonne: Preferiamo quelle filtrate, ma fallback su regex se mancano
         significant_cols = full_data.get("significant_cols", [])
         if not significant_cols:
-             # Fallback vecchia scuola se l'ingestion non ha funzionato
              significant_cols = re.findall(r'(\w+)\s+(?:INT|TEXT|REAL|CHAR|DATE)', ddl, re.IGNORECASE)
 
-        # Smart Hints (Valori Categorici) - Estraiamo solo le righe utili
         raw_profile = full_data.get("data_profile", "")
         categorical_lines = [line.strip() for line in raw_profile.split('\n') if line.strip().startswith("- Colonna")]
-        smart_hints = "\n".join(categorical_lines[:6]) # Max 6 righe
+        smart_hints = "\n".join(categorical_lines[:6])
         if len(categorical_lines) > 6: smart_hints += "\n..."
 
-        # Descrizione: TRONCAMENTO AGGRESSIVO (Per evitare il Loop)
         desc = full_data.get("generated_description", "")
-        if len(desc) > 350: 
-            desc = desc[:350] + "..."
+        if len(desc) > 1000: 
+            desc = desc[:1000] + "..."
 
-        # Costruzione Oggetto Finale
+        # Costruzione Oggetto Finale con FK complete!
         schema_map[tbl_canon] = {
             "table_name": tbl_name,
             "description": desc,
             "columns": significant_cols,   
             "categorical_values": smart_hints,
-            # Passiamo le FK trovate (miste json/regex) all'LLM per aiutarlo a capire i link
-            "foreign_keys": list(referenced) 
+            "foreign_keys": fk_list  # 🔥 Ora l'LLM e il Grafo hanno tutti i dati
         }
 
     except Exception as e:

@@ -6,7 +6,8 @@ from src.graph_utils import expand_selection_with_graph
 from src.config import BASE_URL, API_KEY, LLM_MODEL_NAME
 from src.models import AgentState, ExtractionResult, TableSelectionResult
 from src.tools import search_schema_tool
-
+import warnings
+warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
 # ---------------------------------------------------------
 # 1. CONFIGURAZIONE LLM (LangChain Adapter)
 # ---------------------------------------------------------
@@ -32,19 +33,19 @@ Il tuo compito:
 2. **Estrazione delle parole chiave**: identificare parole chiave o frasi importanti. Trattare le entità denominate composte da più parole come singole parole chiave.
 3. **Classificazione delle parole chiave**:
    - **Entità**: elementi tangibili, oggetti aziendali, nomi di tabelle, valori specifici.
-   - **Operazioni**: parole analitiche (media, massimo, conteggio, maggiore di).
+   - **Operazioni**: parole analitiche (media, massimo, conteggio, maggiore di), devono essere espresse in linguaggio SQLite (es. AVG, MAX, COUNT, SUM, WHERE, ORDER BY, GROUP BY).
 Modalità di ragionamento:
 Pensa passo dopo passo. Concentrati sulla logica aziendale e sui requisiti di recupero dei dati.
 
 #####ESEMPI#####
 Input: ‘Voglio che raggruppi tutti i vincoli che ci sono per ogni fabbricato’
-Output: Intent="Raggruppare i vincoli per ogni fabbricato", Entità=["Vincoli", "Fabbricati"], Operazioni=["Group"]
+Output: Intent="Raggruppare i vincoli per ogni fabbricato", Entità=["Vincoli", "Fabbricati"], Operazioni=["GROUP BY"]
 
 Input: "Voglio che calcoli la media della superficie dei terreni"
-Output: Intent="Calcolare media superficie terreni", Entità=["Terreni", "Superficie"], Operazioni=["Average"]
+Output: Intent="Calcolare media superficie terreni", Entità=["Terreni", "Superficie"], Operazioni=["AVG"]
 
 Input: "Quanti vincoli ci sono?"
-Output: Intent="Conteggio vincoli", Entità=["Vincoli"], Operazioni=["Conta"]
+Output: Intent="Conteggio vincoli", Entità=["Vincoli"], Operazioni=["COUNT"]
 """
 
 # ---------------------------------------------------------
@@ -136,7 +137,7 @@ async def run_table_selector(state: AgentState):
     Sei un Senior Data Architect specializzato in SQL.
     
     OBIETTIVO:
-    Selezionare almeno il sottoinsieme minimo di tabelle necessario per rispondere alla domanda dell'utente.
+    Seleziona le tabelle necessarie per rispondere alla domanda dell'utente.
     
     INPUT:
     1. DOMANDA: "{query}"
@@ -171,7 +172,7 @@ async def run_table_selector(state: AgentState):
         #    Questo aggiungerà 'ValoriInv' se l'LLM ha scelto solo 'BeniMobili' e 'TipiValoreInv'
         final_selection = expand_selection_with_graph(
             llm_selection,
-            schema_list,
+            schema_json,
             root_table_real=result.central_entity
         )
         
