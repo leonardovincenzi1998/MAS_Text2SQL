@@ -106,11 +106,10 @@ echo ""
 echo "🤖 Avvio Chat Interattiva..."
 echo "--------------------------------------------------"
 
-# LA MAGIA È QUI: Intercetta il Ctrl+C (SIGINT) a livello di Bash
-# Questo impedisce allo script di morire e uccidere vLLM accidentalmente
+# intercept Ctrl+C to prevent accidental shutdown of vLLM server
 trap 'echo -e "\n⚠️ Ctrl+C intercettato dal sistema. Rispondi al prompt qui sotto per uscire."' SIGINT
 
-# Loop infinito per permettere il riavvio rapido del codice Python
+# infinite loop for interactive sessions, allowing multiple restarts of the Python agent without killing the vLLM server
 while true; do
     LOG_FILE="chat_log_$(date +%Y-%m-%d_%H%M).txt"
     echo "📝 La conversazione verrà salvata in: $LOG_FILE"
@@ -123,25 +122,26 @@ while true; do
     echo ""
     echo "⚠️ L'agente Python è stato terminato."
     
-    # Sotto-loop blindato per gestire input sporchi o Ctrl+C accidentali
-    while true; do
+    # under-loop for manage dirty input or accidental Ctrl+C
+ì    while true; do
         read -p "🔄 Vuoi riavviare solo l'agente (es. hai modificato il codice Python)? (s/n): " restart_choice
         
         if [[ "$restart_choice" == "s" || "$restart_choice" == "S" ]]; then
             echo "⚡ Riavvio istantaneo (il server vLLM è già caldo)..."
-            break # Esce da questo piccolo loop e ricomincia quello grande (riavvia python)
+            break # Quit from this inner loop and restart the interactive_main.py
         elif [[ "$restart_choice" == "n" || "$restart_choice" == "N" ]]; then
-            break 2 # Esce da ENTRAMBI i loop, andando giù al cleanup finale
+            break 2 # Quit from both loops and proceed to cleanup
         fi
-        # Se premi invio a vuoto o un'altra lettera, il loop semplicemente ripete la domanda
+        # if input is invalid, it will ask again without doing anything
     done
 done
 
-# Ripristina il comportamento normale del Ctrl+C prima di spegnere
+# restore default Ctrl+C behavior for the rest of the script (cleanup)
 trap - SIGINT
 
 # 6. cleanup
-# Viene eseguito solo se hai scelto esplicitamente 'n'
+# executed only if user explicitly chose 'n' to not restart the agent, meaning they want to end the session
+
 echo ""
 echo "🛑 Arresto server vLLM..."
 pkill -f "vllm.entrypoints.openai.api_server"

@@ -112,6 +112,12 @@ async def main():
 
                 # final reasoning log
                 messages = final_state.get("messages", [])
+
+                if len(messages) >= 2:
+                    msg_agente_2 = messages[-2]
+                    content_agente_2 = msg_agente_2.content if hasattr(msg_agente_2, 'content') else str(msg_agente_2)
+                    print(f"\n🧠 [Ragionamento Agente 2 - Table Selector]:\n{content_agente_2}")
+                    
                 if len(messages) > 1:
                      last_msg = messages[-1]
                      content = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)

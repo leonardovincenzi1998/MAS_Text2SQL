@@ -12,6 +12,10 @@ class ExtractionResult(BaseModel):
     operations: List[str] = Field(default_factory=list, description="List of analytical operations to translate into SQLite (e.g., 'MEAN', 'COUNT').")
     filters: List[str] = Field(default_factory=list, description="Specific conditions identified, e.g., 'surface > 100'.")
 
+class SearchSchemaInput(BaseModel):
+    query: str = Field(description="Entity or keywords to search for.")
+    k: int = Field(default=10, description="Number of semantic anchor tables to retrieve.")
+    
 # Structured output for the table selection agent
 class TableSelectionResult(BaseModel):
     central_entity: str = Field(description="The main table that the query revolves around (e.g., 'BeniMobili').")

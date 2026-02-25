@@ -6,7 +6,7 @@ from typing import List, Set, Dict, Optional
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 from langchain_chroma import Chroma
-
+from src.models import SearchSchemaInput
 from src.embedding_factory import get_shared_embedding_function
 from src.utils import get_canonical_name
 
@@ -28,11 +28,6 @@ def get_vectorstore() -> Chroma:
         embedding_function=EMBEDDING_FUNCTION,
         collection_name=COLLECTION_NAME
     )
-
-# input schema for the search_schema_tool
-class SearchSchemaInput(BaseModel):
-    query: str = Field(description="Entity or keywords to search for.")
-    k: int = Field(default=10, description="Number of semantic anchor tables to retrieve.")
 
 # parses raw DDL to find foreign key references missed by metadata
 def _extract_referenced_tables(ddl: str) -> Set[str]:

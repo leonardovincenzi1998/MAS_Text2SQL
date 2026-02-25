@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from src.utils import expand_selection_with_graph
 from src.models import AgentState, ExtractionResult, TableSelectionResult
 from src.tools import search_schema_tool
+from src.database import DatabaseManager
 
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
 
@@ -21,7 +22,7 @@ llm = ChatOpenAI(
     openai_api_base=BASE_URL,
     openai_api_key=API_KEY,
     temperature=0.1
-    )
+)
 
 # prompts maintained exactly as original for stability
 ENTITY_EXTRACTOR_SYSTEM_PROMPT = """
@@ -122,7 +123,7 @@ Your expertise lies in analyzing Italian natural language queries and selecting 
 
 ### JSON SCHEMA
 {{
-"reasoning": "EXTREMELY SHORT logic (MAX 2-3 SENTENCES). Do not explain discarded tables. Just state the core join path.",
+"reasoning": "Step-by-step logic. CRITICAL: You MUST explicitly write down which exact table contains the columns requested by the user's filters (e.g., 'valore', 'etichetta') by checking the schema, then state the join path.",
 "central_entity": "The exact name of the main driving table representing the core subject (e.g., 'BeniMobili').",
 "relevant_tables": ["List", "of", "exact", "table", "names"]
 }}
@@ -155,6 +156,24 @@ Output: {{
 "central_entity": "Categorie",
 "relevant_tables": ["Categorie", "PianiEcoStatiPatrimoniali"]
 }}   
+"""
+
+SQL_GENERATOR_SYSTEM_PROMPT = """
+### ROLE
+You are a Senior Database Administrator specialized in the SQLite dialect. 
+Your expertise lies in translating Italian natural language queries into precise, optimized, and executable SQL queries based on a provided database schema and prior analytical reasoning.
+
+### OPERATIONAL CONSTRAINTS
+- INPUT: A user query in Italian, the exact DDL schema of the relevant tables, and analytical context (filters, operations, join paths).
+- OUTPUT: STRICTLY raw SQL code.
+- NO CONVERSATIONAL FILLERS: Do not add greetings, explanations, or markdown formatting blocks (like ```sql).
+- USE EXACT NAMES: You must use the exact table and column names as defined in the provided DDL (case-sensitive).
+- RELATIONS: Use the provided Foreign Key definitions in the DDL and the reasoning from the Data Architect to perform correct JOINs.
+- CLAUSES: Map the extracted filters to the WHERE clause, operations to aggregations (e.g., COUNT, SUM) or GROUP BY / ORDER BY clauses.
+
+### SPECIFIC JOIN RULES (CRITICAL)
+- DEFAULT TO LEFT JOIN: When linking the main driving entity (e.g., 'BeniMobili') to satellite tables (like locations, categories, or specific details), always prefer `LEFT JOIN` over `INNER JOIN`.
+- CONDITIONS IN 'ON' CLAUSE: If a filter applies to a joined satellite table (e.g., checking a text field like 'Descrizione = "Informatica"'), you MUST put this condition inside the `ON` clause of the `LEFT JOIN`, and NOT in the global `WHERE` clause.
 """
 
 # node 1: entity, operations, and filters extraction
@@ -285,7 +304,7 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", TABLE_SELECTOR_SYSTEM_PROMPT),
-        ("human", "### EXECUTION\nQUERY: {query}\nSCHEMA:\n{schema}n\nOutput:")
+        ("human", "### EXECUTION\nQUERY: {query}\nSCHEMA:\n{schema}\n\nOutput:")
     ])
     
     structured_llm = llm.with_structured_output(TableSelectionResult)
@@ -325,4 +344,68 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
         }
         
     except Exception as e:
-         return {"error": f"Errore Selector LLM: {str(e)}"}
+        return {"error": f"Errore Selector LLM: {str(e)}"}
+
+# node 3: sql generation based on injected ddl, entities extraction and table selection
+async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
+    print("✍️  (SQL Generator) Iniezione DDL e generazione query...")
+    
+    # retrieve selected tables from previous agent
+    selected_tables = state.get("selected_tables", [])
+    if not selected_tables:
+        return {"error": "No tables selected by Agent 2."}
+        
+    # inject raw ddl from database for the selected tables
+    # we use the direct sqlite connection to guarantee 100% accuracy
+    db_manager = DatabaseManager(state["db_path"])
+    ddl_context = ""
+    try:
+        for table in selected_tables:
+            ddl_context += f"-- Schema for {table}:\n{db_manager.get_table_ddl(table)}\n\n"
+    except Exception as e:
+        return {"error": f"DDL extraction error: {str(e)}"}
+
+    # format analytical context from agent 1
+    extraction = state.get("extraction_result")
+    extracted_info = "None"
+    if extraction:
+        extracted_info = (
+            f"Intent: {extraction.intent}\n"
+            f"Entities: {extraction.entities}\n"
+            f"Operations: {extraction.operations}\n"
+            f"Filters: {extraction.filters}"
+        )
+
+    # retrieve graph/table selector reasoning from agent 2 to guide joins
+    messages = state.get("messages", [])
+    last_reasoning = "None"
+    if messages:
+        # handle both string messages and langchain BaseMessage objects
+        last_reasoning = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SQL_GENERATOR_SYSTEM_PROMPT),
+        ("human", "### CONTEXT\n[DDL SCHEMA]\n{ddl_context}\n\n[EXTRACTED INFO]\n{extracted_info}\n\n[JOIN LOGIC SUGGESTION]\n{reasoning}\n\n### QUERY\n{query}\n\nOutput:")
+    ])
+    
+    chain = prompt | llm
+    
+    try:
+        response = await chain.ainvoke({
+            "ddl_context": ddl_context,
+            "extracted_info": extracted_info,
+            "reasoning": last_reasoning,
+            "query": state["user_query"]
+        })
+        
+        # clean output to remove any residual markdown injected by the llm
+        raw_sql = response.content.strip()
+        clean_sql = raw_sql.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()
+        
+        return {
+            "generated_sql": clean_sql,
+            "messages": [f"✅ SQL Generato:\n{clean_sql}"]
+        }
+        
+    except Exception as e:
+        return {"error": f"SQL Generator Error: {str(e)}"}
