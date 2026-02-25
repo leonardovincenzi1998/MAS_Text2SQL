@@ -6,12 +6,10 @@ import warnings
 import traceback
 
 from langchain_core.messages import HumanMessage
+from src.config import DEFAULT_DB_PATH
 
 # suppress pydantic warnings for cleaner cli output
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
-
-# default configuration
-DEFAULT_DB_PATH = "cloneDefinitivoDB.db" 
 
 # main entry point for the interactive text-to-sql cli
 async def main():

@@ -2,10 +2,7 @@ import os
 import torch
 from functools import lru_cache
 from langchain_huggingface import HuggingFaceEmbeddings
-
-# fallback to the cluster path if env variable is not set
-DEFAULT_LOCAL_MODEL_PATH = "/scratch.hpc/leonardo.vincenzi/mas_text2sql/local_models/bge-m3"
-LOCAL_MODEL_PATH = os.getenv("EMBEDDING_MODEL_PATH", DEFAULT_LOCAL_MODEL_PATH)
+from src.config import LOCAL_MODEL_PATH
 
 # initializes and caches the HuggingFace embedding model
 @lru_cache(maxsize=1)

@@ -1,10 +1,8 @@
 import re
 import os
 import json
-import torch
 import networkx as nx
 from typing import List, Optional
-from safetensors.torch import save_file
 
 # cleans and standardizes table or column names to a canonical format
 # removes quotes, brackets, schema prefixes, and converts to lowercase
@@ -29,7 +27,6 @@ def get_canonical_name(name: str) -> str:
     s = s.strip().strip('"').strip("`").strip("[").strip("]").strip("'")
     
     return s.lower()
-
 
 # analyzes selected tables and adds necessary bridge tables using shortest path in FK graph
 def expand_selection_with_graph(
@@ -148,29 +145,3 @@ def expand_selection_with_graph(
     _log_debug(f"[GRAPH] final_real_names={final_real_names}")
     
     return final_real_names
-
-
-if __name__ == "__main__":
-    # path where the .bin was downloaded
-    MODEL_DIR = "/scratch.hpc/leonardo.vincenzi/mas_text2sql/local_models/bge-m3"
-    bin_file = os.path.join(MODEL_DIR, "pytorch_model.bin")
-    safe_file = os.path.join(MODEL_DIR, "model.safetensors")
-
-    print(f"🔄 Converto {bin_file} -> {safe_file}...")
-
-    if not os.path.exists(bin_file):
-        print("❌ Errore: pytorch_model.bin non trovato! Hai fatto il download?")
-        exit(1)
-
-    try:
-        # load using pure torch to bypass transformers strict checks
-        state_dict = torch.load(bin_file, map_location="cpu")
-        
-        # save in safe format
-        save_file(state_dict, safe_file)
-        print("✅ Conversione riuscita! Ora hai model.safetensors.")
-        
-        # optional: remove old file to save space and avoid confusion
-        # os.remove(bin_file) 
-    except Exception as e:
-        print(f"❌ Errore durante la conversione: {e}")

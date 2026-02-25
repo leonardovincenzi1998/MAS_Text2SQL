@@ -22,6 +22,7 @@ class TableSelectionResult(BaseModel):
     reasoning: str = Field(description="EXTREMELY SHORT logical explanation (max 3 sentences) specifying which tables are used.")
     relevant_tables: List[str] = Field(default_factory=list, description="Exact list of selected table names including bridge tables.")
     is_ambiguous: bool = Field(default=False, description="True if the query is too vague to select tables with certainty.")
+
 # Represents the state of the LangGraph multi-agent workflow
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]

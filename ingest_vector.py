@@ -6,38 +6,17 @@ import os
 from typing import List, Dict, Any, Tuple, Set
 import chromadb
 from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+
 from src.embedding_factory import get_chroma_embedding_function
 from src.database import DatabaseManager
 from src.utils import get_canonical_name
-from pydantic_ai.models.openai import OpenAIChatModel
 
-LLM_MODEL_NAME = 'Qwen/Qwen2.5-32B-Instruct-AWQ' 
-BASE_URL = 'http://localhost:8000/v1'
-API_KEY = 'EMPTY'
-
-# configuration
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB_PATH = os.path.join(BASE_DIR, "cloneDefinitivoDB.db")
-DEFAULT_CHROMA_PATH = os.path.join(BASE_DIR, "chroma_db_data")
-COLLECTION_NAME = "langchain"
-
-# agent prompt in english with strict italian output constraint
-DESCRIPTION_AGENT_PROMPT = """
-You are an expert Data Steward and Database Administrator.
-Your task is to generate rich semantic documentation for a SQL table, optimized for Vector Search (RAG).
-
-You will receive:
-1. The table's DDL (Create Table).
-2. A statistical data analysis (samples and detected categorical values).
-
-You must produce a discursive description that explains:
-1. **The Main Entity**: What the table represents in the real world (e.g., "Customer Orders", "Warehouse Products").
-2. **Key Columns**: Describe the columns based on the provided data.
-3. **Specific Vocabulary**: If the analysis shows categorical values (e.g., status = 'shipped', 'pending'), EXPLICITLY LIST THEM. This is crucial to allow the system to map user questions to the correct values.
-4. **Relationships**: If you infer foreign keys (e.g., `client_id`), mention that the table links this entity to clients.
-
-CRITICAL REQUIREMENT: The final generated description MUST be strictly in ITALIAN. Output ONLY the description text, without preambles or extra markdown.
-"""
+from src.config import (
+    DEFAULT_DB_PATH, CHROMA_PATH, COLLECTION_NAME, 
+    LLM_MODEL_NAME, BASE_URL, API_KEY
+)
+from src.prompts import DESCRIPTION_AGENT_PROMPT
 
 def analyze_columns_smart(
     db_path: str, 
@@ -289,8 +268,8 @@ def get_model():
 async def main():
     # argument setup
     parser = argparse.ArgumentParser(description="Ingest DB schema into Chroma Vector Database")
-    parser.add_argument("--db_path", default=os.getenv("DB_PATH", DEFAULT_DB_PATH))
-    parser.add_argument("--chroma_path", default=os.getenv("CHROMA_PATH", DEFAULT_CHROMA_PATH))
+    parser.add_argument("--db_path", default=DEFAULT_DB_PATH)
+    parser.add_argument("--chroma_path", default=CHROMA_PATH)
     args = parser.parse_args()
 
     if not os.path.exists(args.db_path):

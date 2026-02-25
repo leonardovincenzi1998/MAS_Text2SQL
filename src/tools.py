@@ -9,11 +9,7 @@ from langchain_chroma import Chroma
 from src.models import SearchSchemaInput
 from src.embedding_factory import get_shared_embedding_function
 from src.utils import get_canonical_name
-
-# configuration
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CHROMA_PATH = os.getenv("CHROMA_PATH", os.path.join(BASE_DIR, "chroma_db_data"))
-COLLECTION_NAME = "langchain"
+from src.config import CHROMA_PATH, COLLECTION_NAME
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"🔌 Loading Embeddings on: {DEVICE}")
