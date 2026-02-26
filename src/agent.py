@@ -1,5 +1,6 @@
 import json
 import warnings
+import re
 from typing import Dict, Any
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -96,9 +97,12 @@ def format_schema_for_llm(schema_list: list) -> str:
             col_tuples.append(col_str)
                 
         # format as pseudo-markdown
-        tbl_md = f"### Tabella: {name}\n"
-        if desc: 
+        tbl_md = f"### Tabella: {name}\n"  # <--- IL BUG ERA QUI! QUESTA RIGA MANCAVA
+        
+        # Micro-ottimizzazione: stampiamo la descrizione solo se esiste ed è valida
+        if desc and desc.strip() and desc != "Unknown": 
             tbl_md += f"Descrizione: {desc}\n"
+            
         tbl_md += f"Colonne: ( {', '.join(col_tuples)} )\n"
         if cat_vals: 
             tbl_md += f"Valori Notevoli:\n{cat_vals}\n"
@@ -206,15 +210,34 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     if not selected_tables:
         return {"error": "No tables selected by Agent 2."}
         
-    # inject raw ddl from database for the selected tables
-    # we use the direct sqlite connection to guarantee 100% accuracy
     db_manager = DatabaseManager(state["db_path"])
     ddl_context = ""
+    
+    # 1. Iniezione DDL Pulito (Senza CONSTRAINT lunghi)
     try:
         for table in selected_tables:
-            ddl_context += f"-- Schema for {table}:\n{db_manager.get_table_ddl(table)}\n\n"
+            raw_ddl = db_manager.get_table_ddl(table)
+            # Rimuove le righe dei CONSTRAINT dal DDL per risparmiare token all'Agente 3
+            clean_lines = [line for line in raw_ddl.split('\n') if "CONSTRAINT " not in line.upper() and "FOREIGN KEY " not in line.upper()]
+            cleaned_ddl = "\n".join(clean_lines)
+            cleaned_ddl = re.sub(r',\s*\)', '\n)', cleaned_ddl)
+            ddl_context += f"-- Schema for {table}:\n{cleaned_ddl}\n\n"
     except Exception as e:
         return {"error": f"DDL extraction error: {str(e)}"}
+
+    # 2. Iniezione del Markdown Profilato (Solo per le tabelle scelte)
+    candidate_schema_str = state.get("candidate_tables_schema", "[]")
+    try:
+        full_schema_list = json.loads(candidate_schema_str)
+        # Filtriamo per tenere solo le tabelle confermate dall'Agente 2
+        selected_schema_list = [
+            tbl for tbl in full_schema_list 
+            if tbl.get("table_name", tbl.get("table")) in selected_tables
+        ]
+        markdown_context = format_schema_for_llm(selected_schema_list)
+    except Exception as e:
+        print(f"⚠️ Impossibile generare il markdown per l'Agente 3: {e}")
+        markdown_context = "Nessun profilo dati disponibile."
 
     # format analytical context from agent 1
     extraction = state.get("extraction_result")
@@ -231,12 +254,12 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     messages = state.get("messages", [])
     last_reasoning = "None"
     if messages:
-        # handle both string messages and langchain BaseMessage objects
         last_reasoning = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
 
+    # Aggiornato il prompt per includere sia il DDL che il Markdown
     prompt = ChatPromptTemplate.from_messages([
         ("system", SQL_GENERATOR_SYSTEM_PROMPT),
-        ("human", "### CONTEXT\n[DDL SCHEMA]\n{ddl_context}\n\n[EXTRACTED INFO]\n{extracted_info}\n\n[JOIN LOGIC SUGGESTION]\n{reasoning}\n\n### QUERY\n{query}\n\nOutput:")
+        ("human", "### CONTESTO\n[DDL SCHEMA (SINTASSI)]\n{ddl_context}\n\n[PROFILO DATI E VALORI CATEGORICI (MARKDOWN)]\n{markdown_context}\n\n[INFO ESTRATTE]\n{extracted_info}\n\n[SUGGERIMENTO JOIN LOGIC]\n{reasoning}\n\n### DOMANDA UTENTE\n{query}\n\nOutput:")
     ])
     
     chain = prompt | llm
@@ -244,6 +267,7 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     try:
         response = await chain.ainvoke({
             "ddl_context": ddl_context,
+            "markdown_context": markdown_context,
             "extracted_info": extracted_info,
             "reasoning": last_reasoning,
             "query": state["user_query"]

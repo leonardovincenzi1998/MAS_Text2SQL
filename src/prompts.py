@@ -1,19 +1,16 @@
 # Prompt per ingest_vector.py
 DESCRIPTION_AGENT_PROMPT = """
 You are an expert Data Steward and Database Administrator.
-Your task is to generate rich semantic documentation for a SQL table, optimized for Vector Search (RAG).
+Your task is to generate a concise semantic summary for a SQL table.
 
 You will receive:
 1. The table's DDL (Create Table).
 2. A statistical data analysis (samples and detected categorical values).
 
-You must produce a discursive description that explains:
-1. **The Main Entity**: What the table represents in the real world (e.g., "Customer Orders", "Warehouse Products").
-2. **Key Columns**: Describe the columns based on the provided data.
-3. **Specific Vocabulary**: If the analysis shows categorical values (e.g., status = 'shipped', 'pending'), EXPLICITLY LIST THEM. This is crucial to allow the system to map user questions to the correct values.
-4. **Relationships**: If you infer foreign keys (e.g., `client_id`), mention that the table links this entity to clients.
+You must produce a short, discursive description (max 2-3 sentences) that explains ONLY:
+- The Main Entity: What the table represents in the real world (e.g., "Customer Orders", "Warehouse Products").
 
-CRITICAL REQUIREMENT: The final generated description MUST be strictly in ITALIAN. Output ONLY the description text, without preambles or extra markdown.
+CRITICAL REQUIREMENT: The final generated description MUST be strictly in ITALIAN. Output ONLY the description text, without preambles, markdown, or column lists.
 """
 
 # Prompt per src/agent.py -> Entity Extractor
@@ -48,7 +45,7 @@ Your expertise lies in mapping Italian natural language queries into structured 
 
 ### JSON SCHEMA
 {{
-  "reasoning": "Step-by-step logic in English, briefly explaining the key entities, operations and possible filters detected, and why specific SQL operators were chosen.",
+  "reasoning": "Briefly explanation all in few sentences: the key entities, operations and possible filters detected, and why specific SQL operators were chosen.",
   "intent": "Concise summary in Italian.",
   "entities": ["list", "of", "italian", "terms"],
   "operations": ["SQL_KEYWORDS"],
@@ -164,8 +161,4 @@ Your expertise lies in translating Italian natural language queries into precise
 - USE EXACT NAMES: You must use the exact table and column names as defined in the provided DDL (case-sensitive).
 - RELATIONS: Use the provided Foreign Key definitions in the DDL and the reasoning from the Data Architect to perform correct JOINs.
 - CLAUSES: Map the extracted filters to the WHERE clause, operations to aggregations (e.g., COUNT, SUM) or GROUP BY / ORDER BY clauses.
-
-### SPECIFIC JOIN RULES (CRITICAL)
-- DEFAULT TO LEFT JOIN: When linking the main driving entity (e.g., 'BeniMobili') to satellite tables (like locations, categories, or specific details), always prefer `LEFT JOIN` over `INNER JOIN`.
-- CONDITIONS IN 'ON' CLAUSE: If a filter applies to a joined satellite table (e.g., checking a text field like 'Descrizione = "Informatica"'), you MUST put this condition inside the `ON` clause of the `LEFT JOIN`, and NOT in the global `WHERE` clause.
 """

@@ -1,3 +1,4 @@
+import re
 import sqlite3
 import json
 import argparse
@@ -17,6 +18,37 @@ from src.config import (
     LLM_MODEL_NAME, BASE_URL, API_KEY
 )
 from src.prompts import DESCRIPTION_AGENT_PROMPT
+
+# parses raw DDL to find foreign key references missed by metadata
+def extract_implicit_fks_from_ddl(ddl: str) -> Set[str]:
+    if not ddl:
+        return set()
+    
+    # robust regex to capture REFERENCES table_name (column)
+    pattern = r"""
+        REFERENCES\s+
+        (
+            (?:
+                "(?:[^"]+)" |
+                `(?:[^`]+)` |
+                \[(?:[^\]]+)\] |
+                \w+
+            )
+        )
+    """
+    matches = re.findall(pattern, ddl, re.IGNORECASE | re.VERBOSE)
+    
+    normalized = set()
+    for m in matches:
+        clean_name = m.replace('"', '').replace('`', '').replace('[', '').replace(']', '')
+        if '.' in clean_name:
+            clean_name = clean_name.split('.')[-1]
+        
+        canon = get_canonical_name(clean_name)
+        if canon:
+            normalized.add(canon)
+            
+    return normalized
 
 def analyze_columns_smart(
     db_path: str, 
@@ -196,35 +228,60 @@ async def process_single_table(
             real_table_name = table_name
             canonical_name = get_canonical_name(real_table_name)
             
-            # phase a: extract FKs and DDL
+            # --- PHASE A: ESTENSIONI FK (Esplicite da DB + Implicite da DDL) ---
             foreign_keys = get_foreign_keys_robust(db_path, real_table_name)
             ddl = db_manager.get_table_ddl(real_table_name)
 
-            # phase b: smart data profiling
+            implicit_fks = extract_implicit_fks_from_ddl(ddl)
+            existing_targets = {fk.get("to_table_canonical") for fk in foreign_keys if fk.get("to_table_canonical")}
+            
+            for ref in implicit_fks:
+                if ref not in existing_targets:
+                    foreign_keys.append({
+                        "to_table_canonical": ref,
+                        "to_table_real": ref,  
+                        "from_column": "inferita_da_ddl",
+                        "to_column": "id"
+                    })
+                    existing_targets.add(ref)
+
+            # --- PHASE B: SMART DATA PROFILING E FALLBACK COLONNE ---
             stats_text, significant_cols, column_samples = await asyncio.to_thread(
                 analyze_columns_smart, db_path, real_table_name
             )
 
-            # phase c: generate LLM description
+            # Fallback se non ci sono colonne estratte (logica spostata da tools.py)
+            if not significant_cols:
+                significant_cols = re.findall(r'(\w+)\s+(?:INT|TEXT|REAL|CHAR|DATE)', ddl, re.IGNORECASE)
+
+            # Pulizia categorie per limitare payload (logica spostata da tools.py)
+            categorical_lines = []
+            for line in stats_text.split('\n'):
+                if line.strip().startswith("- Colonna"):
+                    if len(line) > 150:
+                        line = line[:145] + "...]"
+                    categorical_lines.append(line.strip())
+                    
+            smart_hints = "\n".join(categorical_lines[:6])
+            if len(categorical_lines) > 6: 
+                smart_hints += "\n..."
+
+            # --- PHASE C: DESCRIZIONE LLM (Ora molto più concisa) ---
             user_content = f"--- DDL TABELLA ---\n{ddl}\n\n{stats_text}"
             result = await agent.run(user_content)
-            
-            # handle PydanticAI version differences
-            description = getattr(result, "data", getattr(result, "output", str(result)))
+            description = getattr(result, "data", getattr(result, "output", str(result))).strip()
         
-            # phase d: prepare metadata payload for the RAG retriever (tools.py)
+            # --- PHASE D: CREAZIONE DELLO SLIM SCHEMA (No DDL, No Profilo Grezzo) ---
             metadata_payload = {
-                "real_table_name": real_table_name,
-                "significant_cols": significant_cols,
-                "canonical_name": canonical_name,
+                "table_name": real_table_name,
+                "description": description,
+                "columns": significant_cols,
+                "categorical_values": smart_hints,
                 "foreign_keys": foreign_keys,
-                "original_ddl": ddl,
-                "generated_description": description,
-                "data_profile": stats_text,
                 "column_samples": column_samples
             }
 
-            # phase e: vector DB upsert
+            # --- PHASE E: VECTOR DB UPSERT (Il DDL va solo nel documento, non nei metadati) ---
             rich_document = f"""
             DESCRIZIONE SEMANTICA:
             {description}
@@ -240,7 +297,7 @@ async def process_single_table(
                 documents=[rich_document],
                 metadatas=[{
                     "canonical_name": canonical_name,
-                    "table_schema": json.dumps(metadata_payload)
+                    "table_schema": json.dumps(metadata_payload) # Solo il JSON snello viaggerà verso Chroma
                 }],
                 ids=[canonical_name]
             )

@@ -25,119 +25,35 @@ def get_vectorstore() -> Chroma:
         collection_name=COLLECTION_NAME
     )
 
-# parses raw DDL to find foreign key references missed by metadata
-def _extract_referenced_tables(ddl: str) -> Set[str]:
-    if not ddl:
-        return set()
-    
-    # robust regex to capture REFERENCES table_name (column)
-    pattern = r"""
-        REFERENCES\s+
-        (
-            (?:
-                "(?:[^"]+)" |
-                `(?:[^`]+)` |
-                \[(?:[^\]]+)\] |
-                \w+
-            )
-        )
-    """
-    matches = re.findall(pattern, ddl, re.IGNORECASE | re.VERBOSE)
-    
-    normalized = set()
-    for m in matches:
-        clean_name = m.replace('"', '').replace('`', '').replace('[', '').replace(']', '')
-        if '.' in clean_name:
-            clean_name = clean_name.split('.')[-1]
-        
-        canon = get_canonical_name(clean_name)
-        if canon:
-            normalized.add(canon)
-            
-    return normalized
-
 # hybrid parser combining JSON and regex implicit FKs
 def _parse_and_add_to_map(raw_json_str: str, schema_map: Dict[str, dict], tables_to_fetch: Optional[Set[str]] = None) -> None:
+    """
+    Parser istantaneo: i dati sono già stati puliti, formattati e "snelliti" 
+    in fase di ingestion. Dobbiamo solo fare il load e mappare le FK.
+    """
     try:
         full_data = json.loads(raw_json_str)
         
-        tbl_name = full_data.get("real_table_name") or full_data.get("table_name")
+        tbl_name = full_data.get("table_name")
         if not tbl_name: 
             return
 
         tbl_canon = get_canonical_name(str(tbl_name))
+        
+        # Evita duplicati
         if tbl_canon in schema_map: 
             return
 
-        # fk handling combine json and regex
-        fk_list = full_data.get("foreign_keys", [])
-        existing_targets = {fk.get("to_table_canonical") for fk in fk_list if fk.get("to_table_canonical")}
-        
-        ddl = full_data.get("original_ddl", "")
-        regex_refs = _extract_referenced_tables(ddl)
-        
-        for ref in regex_refs:
-            if ref not in existing_targets:
-                fk_list.append({
-                    "to_table_canonical": ref,
-                    "to_table_real": ref,  
-                    "from_column": "inferita_da_ddl",
-                    "to_column": "id"
-                })
-                existing_targets.add(ref)
-
+        # Popoliamo il set delle tabelle da espandere tramite le Foreign Keys
         if tables_to_fetch is not None:
-            tables_to_fetch.update(existing_targets)
+            fk_list = full_data.get("foreign_keys", [])
+            for fk in fk_list:
+                target_canon = fk.get("to_table_canonical")
+                if target_canon:
+                    tables_to_fetch.add(target_canon)
 
-        # content handling to reduce LLM token payload
-        significant_cols = full_data.get("significant_cols", [])
-        if not significant_cols:
-             significant_cols = re.findall(r'(\w+)\s+(?:INT|TEXT|REAL|CHAR|DATE)', ddl, re.IGNORECASE)
-
-        # smart description cleanup using regex
-        # warning: regex contains italian keywords to safely match LLM output
-        desc = full_data.get("generated_description", "")
-        
-        pattern = (
-            r'\n\s*(?:'
-            r'\*{0,2}(?:le\s+)?colonn|'
-            r'[^\n]*\bcolonn[a-z]*\b[^\n]*:|'
-            r'(?:\d+\.|\-)\s*(?:\*\*|`)?\w+(?:\*\*|`)?\s*:|'
-            r'\*{0,2}vocabolario|'
-            r'\*{0,2}relazioni'
-            r')'
-        )
-        match = re.search(pattern, desc, re.IGNORECASE)
-        
-        if match:
-            desc = desc[:match.start()]
-            
-        desc = desc.strip()
-        if len(desc) > 800: 
-            desc = desc[:800] + "..."
-
-        # categorical values cleanup
-        raw_profile = full_data.get("data_profile", "")
-        categorical_lines = []
-        
-        for line in raw_profile.split('\n'):
-            if line.strip().startswith("- Colonna"):
-                if len(line) > 150:
-                    line = line[:145] + "...]"
-                categorical_lines.append(line.strip())
-                
-        smart_hints = "\n".join(categorical_lines[:6])
-        if len(categorical_lines) > 6: 
-            smart_hints += "\n..."
-        
-        schema_map[tbl_canon] = {
-            "table_name": tbl_name,
-            "description": desc,
-            "columns": significant_cols,   
-            "categorical_values": smart_hints,
-            "foreign_keys": fk_list,
-            "column_samples": full_data.get("column_samples", {})
-        }
+        # Salviamo lo "Slim Schema" direttamente (non contiene più il DDL pesante)
+        schema_map[tbl_canon] = full_data
 
     except Exception as e:
         print(f"Error parsing json in _parse_and_add_to_map: {e}")
@@ -156,9 +72,15 @@ def search_schema_tool(query: str, k: int = 10) -> str:
 
     try:
         vectorstore = get_vectorstore()
+        collection = vectorstore._collection
         
-        # phase 1: pure similarity search to find anchors
-        anchor_results = vectorstore.similarity_search(query, k=k)
+        # --- FIX PUNTO 3: CLAMP DEL PARAMETRO k ---
+        # Evita di chiedere a ChromaDB più tabelle di quante ne esistano realmente
+        total_docs = collection.count()
+        actual_k = min(k, total_docs) if total_docs > 0 else k
+
+        # Fase 1: Ricerca puramente semantica (trova le "Anchor Tables")
+        anchor_results = vectorstore.similarity_search(query, k=actual_k)
 
         final_schema_map: Dict[str, dict] = {}
         tables_to_fetch_names: Set[str] = set()
@@ -166,17 +88,16 @@ def search_schema_tool(query: str, k: int = 10) -> str:
         anchor_names = [doc.metadata.get("canonical_name", "unknown") for doc in anchor_results]
         print(f"\n🕸️  [GRAPH RAG] Start: {len(anchor_results)} anchor tables found: {anchor_names}")
 
-        # phase a: process anchor nodes
+        # Fase A: Processiamo i nodi àncora
         for doc in anchor_results:
             _process_single_doc(doc, final_schema_map, tables_to_fetch_names)
 
-        # phase b: expansion fetching neighbors
+        # Fase B: Espansione (Fetch dei vicini tramite FK)
         missing_tables = tables_to_fetch_names - set(final_schema_map.keys())
 
         if missing_tables:
             print(f"🔗 [GRAPH RAG] Expansion: Fetching {len(missing_tables)} linked tables: {list(missing_tables)[:5]}...")
             try:
-                collection = vectorstore._collection
                 expansion_results = collection.get(ids=list(missing_tables))
                 
                 if expansion_results and expansion_results.get("metadatas"):
@@ -187,14 +108,14 @@ def search_schema_tool(query: str, k: int = 10) -> str:
             except Exception as e:
                 print(f"⚠️ Expansion error: {e}")
 
-        # phase c: output formatting
+        # Fase C: Output Formatting
         trimmed_schema = list(final_schema_map.values())
         if not trimmed_schema:
             return empty_json
 
         json_output = json.dumps(trimmed_schema, indent=2)
         
-        # debugging payload size
+        # Debugging payload size
         print(f"📊 [GRAPH RAG] Total tables: {len(trimmed_schema)} | Estimated payload tokens: {len(json_output)//4}")
         
         with open("debug_payload_v2.json", "w", encoding="utf-8") as f:
