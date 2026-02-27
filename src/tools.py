@@ -6,10 +6,13 @@ from typing import List, Set, Dict, Optional
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 from langchain_chroma import Chroma
+import pickle
+from langchain_classic.retrievers import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
 from src.models import SearchSchemaInput
 from src.embedding_factory import get_shared_embedding_function
 from src.utils import get_canonical_name
-from src.config import CHROMA_PATH, COLLECTION_NAME #, BM25_PATH
+from src.config import CHROMA_PATH, COLLECTION_NAME, BM25_PATH
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -78,50 +81,40 @@ def search_schema_tool(query: str, k: int = 10) -> str: #mettere k = 7 con Llama
         total_docs = collection.count()
         actual_k = min(k, total_docs) if total_docs > 0 else k
 
-###PARTE NUOVA DA SOSTITUIRE DA QUI ######
-        # Pure similarity search to find anchors
-        anchor_results = vectorstore.similarity_search(query, k=actual_k)
+
+
+        chroma_retriever = vectorstore.as_retriever(search_kwargs={"k": actual_k})
+        
+        try:
+            with open(BM25_PATH, 'rb') as f:
+                bm25_retriever = pickle.load(f)
+            bm25_retriever.k = actual_k
+            
+            # Reciprocal Rank Fusion (RRF): unisce i due retriever. 
+            # I pesi (weights) decidono chi "conta" di più. 0.5/0.5 è il default bilanciato.
+            retriever = EnsembleRetriever(
+                retrievers=[bm25_retriever, chroma_retriever], 
+                weights=[0.4, 0.6]  # 40% Keyword esatta (BM25), 60% Significato (Dense)
+            )
+            print(f"ibrido (BM25 + Dense RRF) attivo (k={actual_k}).")
+        except Exception as e:
+            print(f"⚠️ Indice BM25 non trovato. Fallback su Chroma puro. ({e})")
+            retriever = chroma_retriever
+
+        # Esecuzione della ricerca combinata
+        anchor_results = retriever.invoke(query)
+        
+        # Eliminiamo eventuali duplicati generati dall'unione
+        # (L'EnsembleRetriever di solito li unisce, ma per sicurezza controlliamo gli ID univoci)
+        unique_results = {doc.metadata.get("canonical_name", "unknown"): doc for doc in anchor_results}
+        anchor_results = list(unique_results.values())[:actual_k]
 
         final_schema_map: Dict[str, dict] = {}
         tables_to_fetch_names: Set[str] = set()
 
         anchor_names = [doc.metadata.get("canonical_name", "unknown") for doc in anchor_results]
         print(f"\n🕸️  [GRAPH RAG] Start: {len(anchor_results)} anchor tables found: {anchor_names}")
-###FINO A QUI ######
 
-#PARTE NUOVA
-# chroma_retriever = vectorstore.as_retriever(search_kwargs={"k": actual_k})
-        
-#         try:
-#             with open(BM25_PATH, 'rb') as f:
-#                 bm25_retriever = pickle.load(f)
-#             bm25_retriever.k = actual_k
-            
-#             # Reciprocal Rank Fusion (RRF): unisce i due retriever. 
-#             # I pesi (weights) decidono chi "conta" di più. 0.5/0.5 è il default bilanciato.
-#             retriever = EnsembleRetriever(
-#                 retrievers=[bm25_retriever, chroma_retriever], 
-#                 weights=[0.4, 0.6]  # 40% Keyword esatta (BM25), 60% Significato (Dense)
-#             )
-#             print(f"ibrido (BM25 + Dense RRF) attivo (k={actual_k}).")
-#         except Exception as e:
-#             print(f"⚠️ Indice BM25 non trovato. Fallback su Chroma puro. ({e})")
-#             retriever = chroma_retriever
-
-#         # Esecuzione della ricerca combinata
-#         anchor_results = retriever.invoke(query)
-        
-#         # Eliminiamo eventuali duplicati generati dall'unione
-#         # (L'EnsembleRetriever di solito li unisce, ma per sicurezza controlliamo gli ID univoci)
-#         unique_results = {doc.metadata.get("canonical_name", "unknown"): doc for doc in anchor_results}
-#         anchor_results = list(unique_results.values())[:actual_k]
-
-#         final_schema_map: Dict[str, dict] = {}
-#         tables_to_fetch_names: Set[str] = set()
-
-#         anchor_names = [doc.metadata.get("canonical_name", "unknown") for doc in anchor_results]
-#         print(f"\n🕸️  [GRAPH RAG] Start: {len(anchor_results)} anchor tables found: {anchor_names}")
-#FINE PARTE NUOVA#
 
         # Phase A: process anchor nodes
         for doc in anchor_results:

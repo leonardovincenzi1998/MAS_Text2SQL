@@ -7,9 +7,13 @@ import asyncio
 import os
 from typing import List, Dict, Any, Tuple, Set
 import chromadb
+
+from langchain_core.documents import Document
+from langchain_community.retrievers import BM25Retriever
+
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
-#from src.config import BM25_PATH
+from src.config import BM25_PATH
 
 from src.embedding_factory import get_chroma_embedding_function
 from src.database import DatabaseManager
@@ -373,31 +377,30 @@ async def main():
     success_count = sum(results)
     print(f"\n🏁 Finito! {success_count}/{len(tables)} tabelle indicizzate correttamente.")
 
-#print("📚 Costruzione indice lessicale BM25 (Hybrid Retrieval)...")
+    print("📚 Costruzione indice lessicale BM25 (Hybrid Retrieval)...")
 
-#DECOMMENTARE PER BM25
-# try:
-#     # Recupera tutto il database vettoriale appena creato
-#     all_data = collection.get()
-#     docs_for_bm25 = []
-    
-#     # Converte i dati di Chroma in oggetti Document di LangChain
-#     for doc_text, meta in zip(all_data['documents'], all_data['metadatas']):
-#         docs_for_bm25.append(Document(page_content=doc_text, metadata=meta))
+    try:
+        # Recupera tutto il database vettoriale appena creato
+        all_data = collection.get()
+        docs_for_bm25 = []
         
-#     if docs_for_bm25:
-#         # Addestra il BM25 sui documenti
-#         bm25_retriever = BM25Retriever.from_documents(docs_for_bm25)
-        
-#         # Salva l'indice su disco per poterlo caricare velocemente nei tool
-#         with open(BM25_PATH, 'wb') as f:
-#             pickle.dump(bm25_retriever, f)
-#         print("✅ Indice BM25 completato e salvato su disco.")
-#     else:
-#         print("⚠️ Nessun documento trovato per l'indice BM25.")
-        
-# except Exception as e:
-#     print(f"❌ Errore durante la creazione dell'indice BM25: {e}")
+        # Converte i dati di Chroma in oggetti Document di LangChain
+        for doc_text, meta in zip(all_data['documents'], all_data['metadatas']):
+            docs_for_bm25.append(Document(page_content=doc_text, metadata=meta))
+            
+        if docs_for_bm25:
+            # Addestra il BM25 sui documenti
+            bm25_retriever = BM25Retriever.from_documents(docs_for_bm25)
+            
+            # Salva l'indice su disco per poterlo caricare velocemente nei tool
+            with open(BM25_PATH, 'wb') as f:
+                pickle.dump(bm25_retriever, f)
+            print("✅ Indice BM25 completato e salvato su disco.")
+        else:
+            print("⚠️ Nessun documento trovato per l'indice BM25.")
+            
+    except Exception as e:
+        print(f"❌ Errore durante la creazione dell'indice BM25: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())

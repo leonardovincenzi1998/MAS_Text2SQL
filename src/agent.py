@@ -25,7 +25,7 @@ llm = ChatOpenAI(
     model=LLM_MODEL_NAME,
     openai_api_base=BASE_URL,
     openai_api_key=API_KEY,
-    temperature=0
+    temperature=0.1
 )
 
 # 1. LLM per Agente 1 e 2 (Estrazione e Selezione)
