@@ -1,3 +1,4 @@
+import pickle
 import re
 import sqlite3
 import json
@@ -8,6 +9,7 @@ from typing import List, Dict, Any, Tuple, Set
 import chromadb
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
+#from src.config import BM25_PATH
 
 from src.embedding_factory import get_chroma_embedding_function
 from src.database import DatabaseManager
@@ -228,7 +230,7 @@ async def process_single_table(
             real_table_name = table_name
             canonical_name = get_canonical_name(real_table_name)
             
-            # --- PHASE A: ESTENSIONI FK (Esplicite da DB + Implicite da DDL) ---
+            # --- PHASE A: FK EXTENSIONS (Explicit from DB + Implicit from DDL) ---
             foreign_keys = get_foreign_keys_robust(db_path, real_table_name)
             ddl = db_manager.get_table_ddl(real_table_name)
 
@@ -245,16 +247,16 @@ async def process_single_table(
                     })
                     existing_targets.add(ref)
 
-            # --- PHASE B: SMART DATA PROFILING E FALLBACK COLONNE ---
+            # --- PHASE B: SMART DATA PROFILING AND FALLBACK COLUMNS ---
             stats_text, significant_cols, column_samples = await asyncio.to_thread(
                 analyze_columns_smart, db_path, real_table_name
             )
 
-            # Fallback se non ci sono colonne estratte (logica spostata da tools.py)
+            # Fallback if there are no extracted columns (logic moved from tools.py)
             if not significant_cols:
                 significant_cols = re.findall(r'(\w+)\s+(?:INT|TEXT|REAL|CHAR|DATE)', ddl, re.IGNORECASE)
 
-            # Pulizia categorie per limitare payload (logica spostata da tools.py)
+            # Cleaning categories to limit payload (logic moved from tools.py)
             categorical_lines = []
             for line in stats_text.split('\n'):
                 if line.strip().startswith("- Colonna"):
@@ -266,12 +268,12 @@ async def process_single_table(
             if len(categorical_lines) > 6: 
                 smart_hints += "\n..."
 
-            # --- PHASE C: DESCRIZIONE LLM (Ora molto più concisa) ---
+            # --- PHASE C: LLM DESCRIPTION ---
             user_content = f"--- DDL TABELLA ---\n{ddl}\n\n{stats_text}"
             result = await agent.run(user_content)
             description = getattr(result, "data", getattr(result, "output", str(result))).strip()
         
-            # --- PHASE D: CREAZIONE DELLO SLIM SCHEMA (No DDL, No Profilo Grezzo) ---
+            # --- PHASE D: CREATION OF THE SLIM SCHEMA (No DDL, No Raw Profile) ---
             metadata_payload = {
                 "table_name": real_table_name,
                 "description": description,
@@ -281,7 +283,7 @@ async def process_single_table(
                 "column_samples": column_samples
             }
 
-            # --- PHASE E: VECTOR DB UPSERT (Il DDL va solo nel documento, non nei metadati) ---
+            # --- PHASE E: VECTOR DB UPSERT (The DDL goes only in the document, not in the metadata) ---
             rich_document = f"""
             DESCRIZIONE SEMANTICA:
             {description}
@@ -297,7 +299,7 @@ async def process_single_table(
                 documents=[rich_document],
                 metadatas=[{
                     "canonical_name": canonical_name,
-                    "table_schema": json.dumps(metadata_payload) # Solo il JSON snello viaggerà verso Chroma
+                    "table_schema": json.dumps(metadata_payload)
                 }],
                 ids=[canonical_name]
             )
@@ -370,6 +372,32 @@ async def main():
     
     success_count = sum(results)
     print(f"\n🏁 Finito! {success_count}/{len(tables)} tabelle indicizzate correttamente.")
+
+#print("📚 Costruzione indice lessicale BM25 (Hybrid Retrieval)...")
+
+#DECOMMENTARE PER BM25
+# try:
+#     # Recupera tutto il database vettoriale appena creato
+#     all_data = collection.get()
+#     docs_for_bm25 = []
+    
+#     # Converte i dati di Chroma in oggetti Document di LangChain
+#     for doc_text, meta in zip(all_data['documents'], all_data['metadatas']):
+#         docs_for_bm25.append(Document(page_content=doc_text, metadata=meta))
+        
+#     if docs_for_bm25:
+#         # Addestra il BM25 sui documenti
+#         bm25_retriever = BM25Retriever.from_documents(docs_for_bm25)
+        
+#         # Salva l'indice su disco per poterlo caricare velocemente nei tool
+#         with open(BM25_PATH, 'wb') as f:
+#             pickle.dump(bm25_retriever, f)
+#         print("✅ Indice BM25 completato e salvato su disco.")
+#     else:
+#         print("⚠️ Nessun documento trovato per l'indice BM25.")
+        
+# except Exception as e:
+#     print(f"❌ Errore durante la creazione dell'indice BM25: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())

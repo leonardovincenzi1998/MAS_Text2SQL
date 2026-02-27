@@ -103,6 +103,11 @@ async def main():
                 print("\n🎯 [Agente 2] TABELLE SELEZIONATE:")
                 print(final_state.get("selected_tables", "Nessuna tabella selezionata"))
                 
+                if len(messages) >= 2:
+                    msg_agente_2 = messages[-2]
+                    content_agente_2 = msg_agente_2.content if hasattr(msg_agente_2, 'content') else str(msg_agente_2)
+                    print(f"\n🧠 [Ragionamento Agente 2 - Table Selector]:\n{content_agente_2}")
+
                 # agent 3: sql generation
                 if final_state.get("generated_sql"):
                     print(f"\n✍️  [Agente 3] SQL GENERATO:")
@@ -110,16 +115,6 @@ async def main():
 
                 # final reasoning log
                 messages = final_state.get("messages", [])
-
-                if len(messages) >= 2:
-                    msg_agente_2 = messages[-2]
-                    content_agente_2 = msg_agente_2.content if hasattr(msg_agente_2, 'content') else str(msg_agente_2)
-                    print(f"\n🧠 [Ragionamento Agente 2 - Table Selector]:\n{content_agente_2}")
-                    
-                if len(messages) > 1:
-                     last_msg = messages[-1]
-                     content = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
-                     print(f"\n🧠 [Log/Ragionamento Finale]:\n{content}")
 
             print("-" * 50)
             print("\n" + "x" * 50 + "\n")

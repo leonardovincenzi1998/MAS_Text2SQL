@@ -7,7 +7,8 @@ from src.config import LOCAL_MODEL_PATH
 # initializes and caches the HuggingFace embedding model
 @lru_cache(maxsize=1)
 def get_shared_embedding_function() -> HuggingFaceEmbeddings:
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    #device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu"  # Force CPU usage for gpu savings
 
     if not os.path.isdir(LOCAL_MODEL_PATH):
         raise FileNotFoundError(f"Model path not found: {LOCAL_MODEL_PATH}")

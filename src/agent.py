@@ -25,8 +25,38 @@ llm = ChatOpenAI(
     model=LLM_MODEL_NAME,
     openai_api_base=BASE_URL,
     openai_api_key=API_KEY,
-    temperature=0.1
+    temperature=0
 )
+
+# 1. LLM per Agente 1 e 2 (Estrazione e Selezione)
+# Usiamo penalità leggere per evitare i loop di ragionamento
+# e max_tokens come valvola di sicurezza estrema.
+# llm_reasoning = ChatOpenAI(
+#     model=LLM_MODEL_NAME,
+#     openai_api_base=BASE_URL,
+#     openai_api_key=API_KEY,
+#     temperature=0.1,
+#     max_tokens=1500,  # Ampio margine per far chiudere il JSON
+#     model_kwargs={
+#         "presence_penalty": 0.3,
+#         "frequency_penalty": 0.3
+#     }
+# )
+
+# # 2. LLM per Agente 3 (Generatore SQL)
+# # ASSOLUTAMENTE NESSUNA PENALITÀ: l'SQL ha bisogno di ripetere
+# # parole chiave (JOIN, ON, nomi colonne uguali).
+# llm_sql = ChatOpenAI(
+#     model=LLM_MODEL_NAME,
+#     openai_api_base=BASE_URL,
+#     openai_api_key=API_KEY,
+#     temperature=0.0,
+#     max_tokens=1000  # Evita che scriva un papiro infinito se allucina
+# )
+
+
+
+
 
 # node 1: entity, operations, and filters extraction
 async def run_entity_extractor(state: AgentState) -> Dict[str, Any]:
@@ -97,9 +127,9 @@ def format_schema_for_llm(schema_list: list) -> str:
             col_tuples.append(col_str)
                 
         # format as pseudo-markdown
-        tbl_md = f"### Tabella: {name}\n"  # <--- IL BUG ERA QUI! QUESTA RIGA MANCAVA
+        tbl_md = f"### Tabella: {name}\n"
         
-        # Micro-ottimizzazione: stampiamo la descrizione solo se esiste ed è valida
+        # Print the description if it exists and is valid
         if desc and desc.strip() and desc != "Unknown": 
             tbl_md += f"Descrizione: {desc}\n"
             
@@ -131,7 +161,7 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     # schema retrieval via chromadb tool
     try:
         # retrieve generous number of tables to provide context
-        schema_json = search_schema_tool.invoke({"query": vector_search_query, "k": 10})
+        schema_json = search_schema_tool.invoke({"query": vector_search_query, "k": 10}) #mettere k = 7 con Llama 70B per evitare di sforare i token 
     except Exception as e:
         return {"error": f"Errore Chroma: {str(e)}"}
     
@@ -213,23 +243,23 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     db_manager = DatabaseManager(state["db_path"])
     ddl_context = ""
     
-    # 1. Iniezione DDL Pulito (Senza CONSTRAINT lunghi)
+    #1. Clean DDL injection (without long CONSTRAINTS)
     try:
         for table in selected_tables:
             raw_ddl = db_manager.get_table_ddl(table)
             # Rimuove le righe dei CONSTRAINT dal DDL per risparmiare token all'Agente 3
-            clean_lines = [line for line in raw_ddl.split('\n') if "CONSTRAINT " not in line.upper() and "FOREIGN KEY " not in line.upper()]
-            cleaned_ddl = "\n".join(clean_lines)
-            cleaned_ddl = re.sub(r',\s*\)', '\n)', cleaned_ddl)
-            ddl_context += f"-- Schema for {table}:\n{cleaned_ddl}\n\n"
+            #clean_lines = [line for line in raw_ddl.split('\n') if "CONSTRAINT " not in line.upper() and "FOREIGN KEY " not in line.upper()]
+            #cleaned_ddl = "\n".join(clean_lines)
+            #cleaned_ddl = re.sub(r',\s*\)', '\n)', cleaned_ddl)
+            ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
     except Exception as e:
         return {"error": f"DDL extraction error: {str(e)}"}
 
-    # 2. Iniezione del Markdown Profilato (Solo per le tabelle scelte)
+    #2. Injection of Profiled Markdown (Only for selected tables)
     candidate_schema_str = state.get("candidate_tables_schema", "[]")
     try:
         full_schema_list = json.loads(candidate_schema_str)
-        # Filtriamo per tenere solo le tabelle confermate dall'Agente 2
+        # Filter to keep only the tables confirmed by Agent 2
         selected_schema_list = [
             tbl for tbl in full_schema_list 
             if tbl.get("table_name", tbl.get("table")) in selected_tables
@@ -256,7 +286,6 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     if messages:
         last_reasoning = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
 
-    # Aggiornato il prompt per includere sia il DDL che il Markdown
     prompt = ChatPromptTemplate.from_messages([
         ("system", SQL_GENERATOR_SYSTEM_PROMPT),
         ("human", "### CONTESTO\n[DDL SCHEMA (SINTASSI)]\n{ddl_context}\n\n[PROFILO DATI E VALORI CATEGORICI (MARKDOWN)]\n{markdown_context}\n\n[INFO ESTRATTE]\n{extracted_info}\n\n[SUGGERIMENTO JOIN LOGIC]\n{reasoning}\n\n### DOMANDA UTENTE\n{query}\n\nOutput:")
@@ -264,6 +293,42 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     
     chain = prompt | llm
     
+    # # =========================================================================
+    # # INIZIO CODICE DI DEBUG DA AGGIUNGERE
+    # # =========================================================================
+    # debug_prompt_content = f"""=== SYSTEM PROMPT ===
+    # {SQL_GENERATOR_SYSTEM_PROMPT}
+
+    # === HUMAN PROMPT ===
+    # ### CONTESTO
+    # [DDL SCHEMA (SINTASSI)]
+    # {ddl_context}
+
+    # [PROFILO DATI E VALORI CATEGORICI (MARKDOWN)]
+    # {markdown_context}
+
+    # [INFO ESTRATTE]
+    # {extracted_info}
+
+    # [SUGGERIMENTO JOIN LOGIC]
+    # {last_reasoning}
+
+    # ### DOMANDA UTENTE
+    # {state['user_query']}
+
+    # Output:
+    # """
+    # # Salviamo il prompt esatto su file
+    # try:
+    #     with open("debug_agent3_prompt.txt", "w", encoding="utf-8") as f:
+    #         f.write(debug_prompt_content)
+    #     print("💾 [DEBUG] Prompt esatto dell'Agente 3 salvato in 'debug_agent3_prompt.txt'")
+    # except Exception as debug_e:
+    #     print(f"⚠️ Errore salvataggio file debug: {debug_e}")
+    # # =========================================================================
+    # # FINE CODICE DI DEBUG
+    # # =========================================================================
+
     try:
         response = await chain.ainvoke({
             "ddl_context": ddl_context,

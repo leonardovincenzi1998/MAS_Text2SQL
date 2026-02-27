@@ -3,6 +3,10 @@ DESCRIPTION_AGENT_PROMPT = """
 You are an expert Data Steward and Database Administrator.
 Your task is to generate a concise semantic summary for a SQL table.
 
+[DOMAIN KNOWLEDGE]
+The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
+Please note: many Boolean columns (0/1) beginning with “Is” (e.g. IsGies, IsStampato) are often technical flags of the management application and may not be semantically relevant to the end user.
+
 You will receive:
 1. The table's DDL (Create Table).
 2. A statistical data analysis (samples and detected categorical values).
@@ -97,6 +101,10 @@ TABLE_SELECTOR_SYSTEM_PROMPT = """
 You are a Senior Data Architect specialized in SQL and Database routing. 
 Your expertise lies in analyzing Italian natural language queries and selecting the complete subset of tables from a given database schema to answer the query in detail.
 
+[DOMAIN KNOWLEDGE]
+The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
+Please note: many Boolean columns (0/1) beginning with “Is” (e.g. IsGies, IsStampato) are often technical flags of the management application and may not be semantically relevant to the end user.
+
 ### OPERATIONAL CONSTRAINTS
 - INPUT: Italian user query and a Candidate Schema (Tables, Columns, Foreign Keys, Samples).
 - OUTPUT: Strictly valid JSON.
@@ -113,7 +121,7 @@ Your expertise lies in analyzing Italian natural language queries and selecting 
 
 ### JSON SCHEMA
 {{
-"reasoning": "Step-by-step logic. CRITICAL: You MUST explicitly write down which exact table contains the columns requested by the user's filters (e.g., 'valore', 'etichetta') by checking the schema, then state the join path.",
+"reasoning": "Step-by-step English logic. CRITICAL: You MUST explicitly write down in few sentences which exact table contains the columns requested by the user's filters (e.g., 'valore', 'etichetta') by checking the schema, then state the join path.",
 "central_entity": "The exact name of the main driving table representing the core subject (e.g., 'BeniMobili').",
 "relevant_tables": ["List", "of", "exact", "table", "names"]
 }}
@@ -153,6 +161,10 @@ SQL_GENERATOR_SYSTEM_PROMPT = """
 ### ROLE
 You are a Senior Database Administrator specialized in the SQLite dialect. 
 Your expertise lies in translating Italian natural language queries into precise, optimized, and executable SQL queries based on a provided database schema and prior analytical reasoning.
+
+[DOMAIN KNOWLEDGE]
+The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
+Please note: many Boolean columns (0/1) beginning with “Is” (e.g. IsGies, IsStampato) are often technical flags of the management application and may not be semantically relevant to the end user.
 
 ### OPERATIONAL CONSTRAINTS
 - INPUT: A user query in Italian, the exact DDL schema of the relevant tables, and analytical context (filters, operations, join paths).
