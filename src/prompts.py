@@ -194,6 +194,9 @@ Relevant tables: {selected_tables}
 DDL schema of tables:
 {schema_ddl}
 
+Data Profile & Categorical Values:
+{markdown_context}
+
 --- ERROR DETAILS ---
 Incorrect SQL query:
 {wrong_sql}

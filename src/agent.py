@@ -235,23 +235,55 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         
     db_manager = DatabaseManager(state["db_path"])
     ddl_context = ""
+    candidate_schema_str = state.get("candidate_tables_schema", "[]")
     
-    #1. Clean DDL injection (without long CONSTRAINTS)
+    # Parse securely the metadata saved in ChromaDB (the ‘Slim Schema’ generated in Ingestion)
+    try:
+        full_schema_list = json.loads(candidate_schema_str)
+    except Exception as e:
+        print(f"⚠️ Fallito il parsing del candidate_schema_str: {e}")
+        full_schema_list = []
+
+    #1. Clean DDL injection (Smart column pruning)
     try:
         for table in selected_tables:
+            
             raw_ddl = db_manager.get_table_ddl(table)
-            # Rimuove le righe dei CONSTRAINT dal DDL per risparmiare token all'Agente 3
-            #clean_lines = [line for line in raw_ddl.split('\n') if "CONSTRAINT " not in line.upper() and "FOREIGN KEY " not in line.upper()]
-            #cleaned_ddl = "\n".join(clean_lines)
-            #cleaned_ddl = re.sub(r',\s*\)', '\n)', cleaned_ddl)
-            ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
+            
+            # Search for the table in Chroma's metadata to get clean columns
+            tbl_data = next((t for t in full_schema_list if t.get("table_name", t.get("table")) == table), None)
+            
+            if tbl_data:
+                colonne_pulite = set(tbl_data.get("columns", []))
+                ddl_lines = raw_ddl.split('\n')
+                pruned_ddl_lines = []
+                
+                for line in ddl_lines:
+                    line_upper = line.upper()
+                    
+                    # Always keep the header, brackets, constraints and keys
+                    if any(keyword in line_upper for keyword in ["CREATE TABLE", ");", "CONSTRAINT", "PRIMARY KEY", "FOREIGN KEY"]):
+                        pruned_ddl_lines.append(line)
+                        continue
+                        
+                    # For column definitions, check whether the column name is in the “clean” list
+                    words = line.strip().split()
+                    if words:
+                        col_name = words[0].replace('"', '').replace('[', '').replace(']', '')
+                        if col_name in colonne_pulite:
+                            pruned_ddl_lines.append(line)
+                
+                # Rebuild the thinned-out DDL
+                clean_ddl = "\n".join(pruned_ddl_lines)
+                ddl_context += f"-- Schema for {table}:\n{clean_ddl}\n\n"
+            else:
+                # Security fallback: if it cannot find the metadata, pass the entire DDL
+                ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
     except Exception as e:
         return {"error": f"DDL extraction error: {str(e)}"}
 
-    #2. Injection of Profiled Markdown (Only for selected tables)
-    candidate_schema_str = state.get("candidate_tables_schema", "[]")
+    # 2. Injection of Profiled Markdown (Only for selected tables)
     try:
-        full_schema_list = json.loads(candidate_schema_str)
         # Filter to keep only the tables confirmed by Agent 2
         selected_schema_list = [
             tbl for tbl in full_schema_list 
@@ -285,42 +317,6 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     ])
     
     chain = prompt | llm_sql
-    
-    # # =========================================================================
-    # # INIZIO CODICE DI DEBUG DA AGGIUNGERE
-    # # =========================================================================
-    # debug_prompt_content = f"""=== SYSTEM PROMPT ===
-    # {SQL_GENERATOR_SYSTEM_PROMPT}
-
-    # === HUMAN PROMPT ===
-    # ### CONTESTO
-    # [DDL SCHEMA (SINTASSI)]
-    # {ddl_context}
-
-    # [PROFILO DATI E VALORI CATEGORICI (MARKDOWN)]
-    # {markdown_context}
-
-    # [INFO ESTRATTE]
-    # {extracted_info}
-
-    # [SUGGERIMENTO JOIN LOGIC]
-    # {last_reasoning}
-
-    # ### DOMANDA UTENTE
-    # {state['user_query']}
-
-    # Output:
-    # """
-    # # Salviamo il prompt esatto su file
-    # try:
-    #     with open("debug_agent3_prompt.txt", "w", encoding="utf-8") as f:
-    #         f.write(debug_prompt_content)
-    #     print("💾 [DEBUG] Prompt esatto dell'Agente 3 salvato in 'debug_agent3_prompt.txt'")
-    # except Exception as debug_e:
-    #     print(f"⚠️ Errore salvataggio file debug: {debug_e}")
-    # # =========================================================================
-    # # FINE CODICE DI DEBUG
-    # # =========================================================================
 
     try:
         response = await chain.ainvoke({
@@ -337,6 +333,8 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         
         return {
             "generated_sql": clean_sql,
+            "pruned_ddl": ddl_context,
+            "markdown_context": markdown_context,
             "messages": [f"✅ SQL Generato:\n{clean_sql}"]
         }
         
@@ -351,13 +349,13 @@ async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
         return {"execution_status": False, "error_traceback": "Nessuna query SQL generata da eseguire."}
     
     db_manager = DatabaseManager(state["db_path"])
-    conn = db_manager.get_connection() # È già in mode=ro grazie al tuo database.py
+    conn = db_manager.get_connection()
     
     try:
         cursor = conn.cursor()
         
-        # Ispezione Semantica: Forza un LIMIT 10 se non è presente per evitare payload enormi
-        # e per verificare rapidamente se la query restituisce dati vuoti.
+        # Semantic Inspection: Enforce a LIMIT 10 if not present to avoid huge payloads
+        # and to quickly check if the query returns empty data.
         check_query = query
         if "LIMIT" not in check_query.upper():
             check_query += "\nLIMIT 10"
@@ -365,10 +363,10 @@ async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
         cursor.execute(check_query)
         rows = cursor.fetchall()
         
-        # Conversione dei risultati in dizionari
+        # Converting results into dictionaries
         data_sample = [dict(row) for row in rows]
         
-        # Data Inspection: Controllo del "risultato vuoto"
+        # Data Inspection: Checking for ‘empty results’
         if len(data_sample) == 0:
             msg_errore_logico = (
                 "L'esecuzione ha avuto successo sintatticamente, ma il risultato è vuoto (0 righe). "
@@ -390,7 +388,7 @@ async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
         }
         
     except sqlite3.Error as e:
-        # Execution-Guided Feedback: Catturiamo lo stack trace reale del database
+        # Execution-Guided Feedback: Capture the actual database stack trace
         traceback_str = f"Errore SQLite ({type(e).__name__}): {str(e)}"
         print(f"   ❌ (Sandbox) Errore di Runtime: {traceback_str}")
         return {
@@ -407,7 +405,8 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
     # 1. Context recovery
     user_query = state["user_query"]
     selected_tables = state["selected_tables"]
-    schema_ddl = state.get("candidate_tables_schema", "Schema non disponibile")
+    schema_ddl = state.get("pruned_ddl", "Schema non disponibile")
+    markdown_context = state.get("markdown_context", "Nessun profilo dati disponibile")
     wrong_sql = state.get("generated_sql", "")
     error_traceback = state.get("error_traceback", "Errore sconosciuto")
     
@@ -416,6 +415,7 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         user_query=user_query,
         selected_tables=", ".join(selected_tables),
         schema_ddl=schema_ddl,
+        markdown_context=markdown_context,
         wrong_sql=wrong_sql,
         error_traceback=error_traceback
     )
@@ -425,7 +425,7 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
     structured_llm = llm_reasoning.with_structured_output(CriticResult).with_retry(stop_after_attempt=3)
     
     try:
-        response: CriticResult = structured_llm.invoke(messages)
+        response: CriticResult = await structured_llm.ainvoke(messages)
         
         print(f"   💡 (Critic Plan): {response.correction_plan}")
         print(f"   🔧 (New SQL): {response.corrected_sql}")

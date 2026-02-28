@@ -31,6 +31,8 @@ class AgentState(TypedDict):
     selected_tables: List[str]
     extraction_result: Optional[ExtractionResult] = None
     candidate_tables_schema: Optional[str] = None
+    pruned_ddl: Optional[str] = None 
+    markdown_context: Optional[str] = None
     generated_sql: Optional[str] = None
     error: Optional[str] = None
 
