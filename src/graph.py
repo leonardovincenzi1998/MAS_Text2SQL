@@ -1,32 +1,23 @@
 from langgraph.graph import StateGraph, END
-from src.agent import run_entity_extractor, run_table_selector, run_sql_generator, run_execution_sandbox
+from src.agent import run_entity_extractor, run_table_selector, run_sql_generator, run_execution_sandbox, run_query_critic
 from src.models import AgentState
 
-# Funzione dummy per il Critic Agent (la implementeremo nel prossimo step)
-async def run_query_critic(state: AgentState):
-    # Incrementa il contatore a ogni passaggio nel nodo critic
-    current_retries = state.get("retry_count", 0)
-    print(f"🕵️‍♂️ (Query Critic) Tentativo di correzione #{current_retries + 1}...")
-    # Qui andrà la logica LLM con la Tassonomia degli Errori
-    return {"retry_count": current_retries + 1}
-
-# --- FUNZIONE DI ROUTING CONDIZIONALE ---
+# Conditional routing function
 def routing_decision(state: AgentState) -> str:
     """Decide se terminare, o invocare l'agente Critic in base ai risultati della Sandbox."""
     status = state.get("execution_status")
     retries = state.get("retry_count", 0)
-    MAX_RETRIES = 3 # Limite per evitare loop infiniti
+    MAX_RETRIES = 3 # Limit to avoid infinite loops
     
     if status is True:
-        # Nessun errore, dati trovati
+        # No errors, data found
         return "end"
     
     if retries >= MAX_RETRIES:
-        # Fallimento irreversibile (max tentativi raggiunti)
         print("🛑 (Router) Numero massimo di tentativi raggiunto. Abortire.")
         return "end"
         
-    # Errore rilevato (sintattico o semantico), mandiamo la query al critic
+    # Error detected (syntactic or semantic), let's send the query to the critic
     return "critic"
 
 # builds and compiles the langgraph workflow for the text-to-sql multi-agent system
@@ -48,14 +39,14 @@ def create_workflow() -> StateGraph:
     workflow.add_edge("sql_generator", "execution_sandbox")
 
     workflow.add_conditional_edges(
-        "execution_sandbox", # Nodo di partenza
-        routing_decision,    # Funzione logica
+        "execution_sandbox", # Starting point
+        routing_decision,    # Logic function
         {
-            "end": END,                  # Se True o Max Retries -> Fine
-            "critic": "query_critic"     # Altrimenti -> Vai al 4° Agente
+            "end": END,                  # If True or Max Retries -> End
+            "critic": "query_critic"     # Otherwise -> Go to 4th Agent
         }
     )
-    # 5. Chiusura del ciclo: il Critic rigenera l'SQL e lo rimanda in esecuzione
+    # End of loop: Critic regenerates the SQL and sends it back to be executed.
     workflow.add_edge("query_critic", "execution_sandbox")
     return workflow.compile()
 
