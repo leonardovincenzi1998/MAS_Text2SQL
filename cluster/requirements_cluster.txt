@@ -36,3 +36,4 @@ bitsandbytes                # Ottimo per caricare modelli in 4-bit/8-bit
 python-dotenv
 huggingface_hub[cli]
 tiktoken                    # Spesso richiesto dai tokenizzatori, meglio esplicitarlo
+rank_bm25

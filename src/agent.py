@@ -21,42 +21,36 @@ from src.prompts import (
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
 
 # llm configuration via langchain adapter
-llm = ChatOpenAI(
-    model=LLM_MODEL_NAME,
-    openai_api_base=BASE_URL,
-    openai_api_key=API_KEY,
-    temperature=0.1
-)
+# llm = ChatOpenAI(
+#     model=LLM_MODEL_NAME,
+#     openai_api_base=BASE_URL,
+#     openai_api_key=API_KEY,
+#     temperature=0.1
+# )
 
 # 1. LLM per Agente 1 e 2 (Estrazione e Selezione)
 # Usiamo penalità leggere per evitare i loop di ragionamento
 # e max_tokens come valvola di sicurezza estrema.
-# llm_reasoning = ChatOpenAI(
-#     model=LLM_MODEL_NAME,
-#     openai_api_base=BASE_URL,
-#     openai_api_key=API_KEY,
-#     temperature=0.1,
-#     max_tokens=1500,  # Ampio margine per far chiudere il JSON
-#     model_kwargs={
-#         "presence_penalty": 0.3,
-#         "frequency_penalty": 0.3
-#     }
-# )
+llm_reasoning = ChatOpenAI(
+    model=LLM_MODEL_NAME,
+    openai_api_base=BASE_URL,
+    openai_api_key=API_KEY,
+    temperature=0.1,
+    #max_tokens=2000,
+    presence_penalty=0.2,
+    frequency_penalty=0.2
+)
 
 # # 2. LLM per Agente 3 (Generatore SQL)
 # # ASSOLUTAMENTE NESSUNA PENALITÀ: l'SQL ha bisogno di ripetere
 # # parole chiave (JOIN, ON, nomi colonne uguali).
-# llm_sql = ChatOpenAI(
-#     model=LLM_MODEL_NAME,
-#     openai_api_base=BASE_URL,
-#     openai_api_key=API_KEY,
-#     temperature=0.0,
-#     max_tokens=1000  # Evita che scriva un papiro infinito se allucina
-# )
-
-
-
-
+llm_sql = ChatOpenAI(
+    model=LLM_MODEL_NAME,
+    openai_api_base=BASE_URL,
+    openai_api_key=API_KEY,
+    temperature=0.0
+    #max_tokens=1000
+)
 
 # node 1: entity, operations, and filters extraction
 async def run_entity_extractor(state: AgentState) -> Dict[str, Any]:
@@ -67,7 +61,7 @@ async def run_entity_extractor(state: AgentState) -> Dict[str, Any]:
         ("human", "{input}")
     ])
     
-    structured_llm = llm.with_structured_output(ExtractionResult)
+    structured_llm = llm_reasoning.with_structured_output(ExtractionResult).with_retry(stop_after_attempt=3)
     chain = prompt | structured_llm
     
     try:
@@ -161,7 +155,7 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     # schema retrieval via chromadb tool
     try:
         # retrieve generous number of tables to provide context
-        schema_json = search_schema_tool.invoke({"query": vector_search_query, "k": 10}) #mettere k = 7 con Llama 70B per evitare di sforare i token 
+        schema_json = search_schema_tool.invoke({"query": vector_search_query, "k": 6}) #mettere k = 7 con Llama 70B per evitare di sforare i token 
     except Exception as e:
         return {"error": f"Errore Chroma: {str(e)}"}
     
@@ -192,7 +186,7 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
         ("human", "### EXECUTION\nQUERY: {query}\nSCHEMA:\n{schema}\n\nOutput:")
     ])
     
-    structured_llm = llm.with_structured_output(TableSelectionResult)
+    structured_llm = llm_reasoning.with_structured_output(TableSelectionResult).with_retry(stop_after_attempt=3)
     chain = prompt | structured_llm
     
     try:
@@ -291,7 +285,7 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         ("human", "### CONTESTO\n[DDL SCHEMA (SINTASSI)]\n{ddl_context}\n\n[PROFILO DATI E VALORI CATEGORICI (MARKDOWN)]\n{markdown_context}\n\n[INFO ESTRATTE]\n{extracted_info}\n\n[SUGGERIMENTO JOIN LOGIC]\n{reasoning}\n\n### DOMANDA UTENTE\n{query}\n\nOutput:")
     ])
     
-    chain = prompt | llm
+    chain = prompt | llm_sql
     
     # # =========================================================================
     # # INIZIO CODICE DI DEBUG DA AGGIUNGERE

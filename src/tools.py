@@ -70,7 +70,7 @@ def _process_single_doc(doc, schema_map: Dict[str, dict], tables_to_fetch: Set[s
 
 # Hybrid retrieval tool combining semantic search and regex fk expansion
 @tool("search_schema_tool", args_schema=SearchSchemaInput)
-def search_schema_tool(query: str, k: int = 10) -> str: #mettere k = 7 con Llama 70B per evitare di sforare i token 
+def search_schema_tool(query: str, k: int = 6) -> str: #mettere k = 7 con Llama 70B per evitare di sforare i token 
     """Ricerca lo schema del database utilizzando ricerca semantica ibrida e foreign keys."""
     empty_json = json.dumps([], indent=2)
 
@@ -121,10 +121,15 @@ def search_schema_tool(query: str, k: int = 10) -> str: #mettere k = 7 con Llama
             _process_single_doc(doc, final_schema_map, tables_to_fetch_names)
 
         # Phase B: expansion fetching neighbors based on Foreign Keys
-        missing_tables = tables_to_fetch_names - set(final_schema_map.keys())
-
-        if missing_tables:
-            print(f"🔗 [GRAPH RAG] Expansion: Fetching {len(missing_tables)} linked tables: {list(missing_tables)[:5]}...")
+        # Phase B: Multi-Hop Expansion (max 2 salti per evitare di tirare dentro tutto il DB)
+        MAX_HOPS = 2
+        for hop in range(MAX_HOPS):
+            missing_tables = tables_to_fetch_names - set(final_schema_map.keys())
+            
+            if not missing_tables:
+                break # Nessuna nuova tabella da scaricare, fermiamo l'espansione
+                
+            print(f"🔗 [GRAPH RAG] Expansion Hop {hop+1}: Fetching {len(missing_tables)} linked tables: {list(missing_tables)[:5]}...")
             try:
                 expansion_results = collection.get(ids=list(missing_tables))
                 
@@ -132,9 +137,11 @@ def search_schema_tool(query: str, k: int = 10) -> str: #mettere k = 7 con Llama
                     for meta in expansion_results["metadatas"]:
                         raw_json = meta.get("table_schema")
                         if raw_json:
+                            # Questa funzione aggiungerà nuove FK a tables_to_fetch_names,
+                            # alimentando il prossimo giro del ciclo (Hop successivo)
                             _parse_and_add_to_map(raw_json, final_schema_map, tables_to_fetch_names)
             except Exception as e:
-                print(f"⚠️ Expansion error: {e}")
+                print(f"⚠️ Expansion error at hop {hop+1}: {e}")
 
         # Phase C: Output Formatting
         trimmed_schema = list(final_schema_map.values())

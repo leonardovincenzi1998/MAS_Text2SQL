@@ -5,7 +5,7 @@ Your task is to generate a concise semantic summary for a SQL table.
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
-Please note: many Boolean columns (0/1) beginning with “Is” (e.g. IsGies, IsStampato) are often technical flags of the management application and may not be semantically relevant to the end user.
+Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query (e.g., terms like 'current', 'active', 'latest', 'deleted'). Ignore all other technical or internal system flags that have no semantic connection to the user's request.
 
 You will receive:
 1. The table's DDL (Create Table).
@@ -22,6 +22,10 @@ ENTITY_EXTRACTOR_SYSTEM_PROMPT = """
 ### ROLE
 You are a highly specialized Natural Language to SQL (NL2SQL) Parser. 
 Your expertise lies in mapping Italian natural language queries into structured data components that will be use for select relevant tables and columns for SQLite retrieval for a multi-agent system text2sql.
+
+[DOMAIN KNOWLEDGE]
+The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
+Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query (e.g., terms like 'current', 'active', 'latest', 'deleted'). Ignore all other technical or internal system flags that have no semantic connection to the user's request.
 
 ### OPERATIONAL CONSTRAINTS
 - INPUT: Italian natural language.
@@ -103,7 +107,7 @@ Your expertise lies in analyzing Italian natural language queries and selecting 
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
-Please note: many Boolean columns (0/1) beginning with “Is” (e.g. IsGies, IsStampato) are often technical flags of the management application and may not be semantically relevant to the end user.
+Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query (e.g., terms like 'current', 'active', 'latest', 'deleted'). Ignore all other technical or internal system flags that have no semantic connection to the user's request."
 
 ### OPERATIONAL CONSTRAINTS
 - INPUT: Italian user query and a Candidate Schema (Tables, Columns, Foreign Keys, Samples).
@@ -164,7 +168,7 @@ Your expertise lies in translating Italian natural language queries into precise
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
-Please note: many Boolean columns (0/1) beginning with “Is” (e.g. IsGies, IsStampato) are often technical flags of the management application and may not be semantically relevant to the end user.
+Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query (e.g., terms like 'current', 'active', 'latest', 'deleted'). Ignore all other technical or internal system flags that have no semantic connection to the user's request.
 
 ### OPERATIONAL CONSTRAINTS
 - INPUT: A user query in Italian, the exact DDL schema of the relevant tables, and analytical context (filters, operations, join paths).
@@ -173,4 +177,7 @@ Please note: many Boolean columns (0/1) beginning with “Is” (e.g. IsGies, Is
 - USE EXACT NAMES: You must use the exact table and column names as defined in the provided DDL (case-sensitive).
 - RELATIONS: Use the provided Foreign Key definitions in the DDL and the reasoning from the Data Architect to perform correct JOINs.
 - CLAUSES: Map the extracted filters to the WHERE clause, operations to aggregations (e.g., COUNT, SUM) or GROUP BY / ORDER BY clauses.
+
+"SQL BEST PRACTICE FOR GROUP BY: 
+Whenever you group results by an entity's name, description, or label, you MUST ALWAYS include its Primary Key in the GROUP BY clause alongside the name. This strictly prevents the accidental merging of distinct entities that share the same name (homonyms)."
 """

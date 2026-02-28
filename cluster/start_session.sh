@@ -55,6 +55,8 @@ if pgrep -f "vllm.entrypoints.openai.api_server" > /dev/null; then
     echo "⚠️ vLLM sembra già in esecuzione. Utilizzo quello esistente..."
 else
     echo "🚀 Avvio Server vLLM (Qwen 32B) in background..."
+    #echo "🚀 Avvio Server vLLM (Llama 3.3 70B) in background..."
+
     echo "   📄 I log del server verranno scritti in: vllm_server.log"
     
     # Start with the SAME parameters as .sbatch
@@ -68,7 +70,15 @@ else
         --gpu-memory-utilization 0.75 \
         --max-model-len 32768 \
         --disable-log-requests > vllm_server.log 2>&1 &
-    
+    # python3 -m vllm.entrypoints.openai.api_server \
+    # --model hugging-quants/Meta-Llama-3.3-70B-Instruct-AWQ-INT4 \
+    # --quantization awq \
+    # --dtype auto \
+    # --api-key EMPTY \
+    # --port 8000 \
+    # --gpu-memory-utilization 0.95 \
+    # --max-model-len 16384 \
+    # --disable-log-requests > vllm_server.log 2>&1 &
     SERVER_PID=$!
     
     echo "⏳ Attesa avvio server (Timeout 300s)..."
@@ -116,7 +126,7 @@ while true; do
     echo "📝 La conversazione verrà salvata in: $LOG_FILE"
 
     # Launch the interactive script
-    python3 interactive_main.py
+    python3 -u interactive_main.py 2>&1 | tee -a "$LOG_FILE"
 
     echo ""
     echo "⚠️ L'agente Python è stato terminato."
@@ -126,7 +136,7 @@ while true; do
         read -p "🔄 Vuoi riavviare solo l'agente (es. hai modificato il codice Python)? (s/n): " restart_choice
         
         if [[ "$restart_choice" == "s" || "$restart_choice" == "S" ]]; then
-            echo "⚡ Riavvio istantaneo (il server vLLM è già caldo)..."
+            echo "⚡ Riavvio istantaneo (il server vLLM è già pronto)..."
             break # Quit from this inner loop and restart the interactive_main.py
         elif [[ "$restart_choice" == "n" || "$restart_choice" == "N" ]]; then
             break 2 # Quit from both loops and proceed to cleanup

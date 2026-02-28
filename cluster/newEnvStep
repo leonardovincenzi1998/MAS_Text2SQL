@@ -1,0 +1,38 @@
+# Definisci il tuo scratch
+export SCRATCH_DIR="/scratch.hpc/leonardo.vincenzi"
+
+# Devia le cache e le cartelle temporanee
+export PIP_CACHE_DIR="$SCRATCH_DIR/.cache/pip"
+export TMPDIR="$SCRATCH_DIR/tmp"
+export XDG_CACHE_HOME="$SCRATCH_DIR/.cache"
+
+# Crea le cartelle se non esistono
+mkdir -p $PIP_CACHE_DIR $TMPDIR $XDG_CACHE_HOME
+
+srun --nodes=1 --ntasks=1 --cpus-per-task=8 --gres=gpu:1 --mem=58G --partition=l40 --pty bash
+
+# Crea il venv direttamente nello scratch
+python3 -m venv "$SCRATCH_DIR/venv"
+
+# Attivalo
+source "$SCRATCH_DIR/venv/bin/activate"
+
+
+# Aggiorna i tool di base
+pip install --upgrade pip setuptools wheel
+
+# 1. Installa PyTorch (CUDA 11.8 come richiesto)
+pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# 2. Installa vLLM separatamente (è il pacchetto più delicato)
+# Nota: vllm 0.6.4 richiede versioni specifiche di torch, 
+# se vedi conflitti rimuovi il vincolo della versione o usa quella pre-compilata.
+pip install vllm==0.6.4.post1
+
+# 3. Installa il resto dal tuo requirements.txt
+# (Assicurati di aver creato il file requirements.txt con il contenuto che hai postato)
+pip install -r requirements_cluster.txt
+
+
+chmod +x mas_text2sql/cluster/start_session.sh
+
