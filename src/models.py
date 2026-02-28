@@ -1,4 +1,4 @@
-from typing import List, Optional, Any, TypedDict
+from typing import Dict, List, Optional, Any, TypedDict
 from typing_extensions import Annotated
 from pydantic import BaseModel, Field
 from dataclasses import dataclass
@@ -31,9 +31,17 @@ class AgentState(TypedDict):
     selected_tables: List[str]
     extraction_result: Optional[ExtractionResult] = None
     candidate_tables_schema: Optional[str] = None
-    error: Optional[str] = None
     generated_sql: Optional[str] = None
+    error: Optional[str] = None
 
+    execution_status: Optional[bool] = None     # Track success/failure of execution in Sandbox
+    error_traceback: Optional[str] = None       # Caught SQL exception or ‘empty result’ flag
+    retry_count: int                            # Counter to prevent infinite loops
+    data_sample: Optional[List[Dict[str, Any]]] = None # Extracted data sample (if successful)
+
+class CriticResult(BaseModel):
+    correction_plan: str = Field(description="Step-by-step reasoning that identifies the error category (from the taxonomy) and briefly explains how to correct it.")
+    corrected_sql: str = Field(description="The new SQL query is correct and ready to be executed, without markdown or comments.")
 # Dependencies injected into the schema validation processes
 @dataclass
 class SchemaDeps:

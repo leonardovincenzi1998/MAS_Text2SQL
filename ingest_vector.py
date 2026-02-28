@@ -380,19 +380,19 @@ async def main():
     print("📚 Costruzione indice lessicale BM25 (Hybrid Retrieval)...")
 
     try:
-        # Recupera tutto il database vettoriale appena creato
+        # Recover the entire vector database you just created
         all_data = collection.get()
         docs_for_bm25 = []
         
-        # Converte i dati di Chroma in oggetti Document di LangChain
+        # Converts Chroma data into LangChain Document objects
         for doc_text, meta in zip(all_data['documents'], all_data['metadatas']):
             docs_for_bm25.append(Document(page_content=doc_text, metadata=meta))
             
         if docs_for_bm25:
-            # Addestra il BM25 sui documenti
+            # Train the BM25 on documents
             bm25_retriever = BM25Retriever.from_documents(docs_for_bm25)
             
-            # Salva l'indice su disco per poterlo caricare velocemente nei tool
+            # Save the index to disk so that it can be quickly loaded into the tools
             with open(BM25_PATH, 'wb') as f:
                 pickle.dump(bm25_retriever, f)
             print("✅ Indice BM25 completato e salvato su disco.")

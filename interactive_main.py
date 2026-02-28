@@ -66,7 +66,8 @@ async def main():
                 "user_query": user_query,
                 "db_path": db_path,
                 "selected_tables": [],
-                "error": None
+                "error": None,
+                "retry_count": 0
             }
 
             # execute the graph

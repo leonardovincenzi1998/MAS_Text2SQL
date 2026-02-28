@@ -2,20 +2,20 @@ import json
 import warnings
 import re
 from typing import Dict, Any
-
+import sqlite3
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
-
+from langchain_core.messages import SystemMessage, HumanMessage
 from src.utils import expand_selection_with_graph
-from src.models import AgentState, ExtractionResult, TableSelectionResult
+from src.models import AgentState, ExtractionResult, TableSelectionResult, CriticResult
 from src.tools import search_schema_tool
 from src.database import DatabaseManager
-
 from src.config import LLM_MODEL_NAME, BASE_URL, API_KEY
 from src.prompts import (
     ENTITY_EXTRACTOR_SYSTEM_PROMPT,
     TABLE_SELECTOR_SYSTEM_PROMPT,
-    SQL_GENERATOR_SYSTEM_PROMPT
+    SQL_GENERATOR_SYSTEM_PROMPT,
+    QUERY_CRITIC_PROMPT
 )
 
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
@@ -28,9 +28,9 @@ warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValu
 #     temperature=0.1
 # )
 
-# 1. LLM per Agente 1 e 2 (Estrazione e Selezione)
-# Usiamo penalità leggere per evitare i loop di ragionamento
-# e max_tokens come valvola di sicurezza estrema.
+# 1. LLM for Agent 1 and 2 (Entity Extraction and Table Selection)
+# Used light penalties to avoid reasoning loops
+# and max_tokens as an extreme safety valve.
 llm_reasoning = ChatOpenAI(
     model=LLM_MODEL_NAME,
     openai_api_base=BASE_URL,
@@ -41,9 +41,8 @@ llm_reasoning = ChatOpenAI(
     frequency_penalty=0.2
 )
 
-# # 2. LLM per Agente 3 (Generatore SQL)
-# # ASSOLUTAMENTE NESSUNA PENALITÀ: l'SQL ha bisogno di ripetere
-# # parole chiave (JOIN, ON, nomi colonne uguali).
+# # 2. LLM for Agent 3 (SQL Generation)
+# # No penalty SQL need to repeat keywords (JOIN, ON, column names).
 llm_sql = ChatOpenAI(
     model=LLM_MODEL_NAME,
     openai_api_base=BASE_URL,
@@ -343,3 +342,106 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         
     except Exception as e:
         return {"error": f"SQL Generator Error: {str(e)}"}
+    
+async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
+    print("🛠️  (Execution Sandbox) Esecuzione query in ambiente isolato...")
+
+    query = state.get("generated_sql")
+    if not query:
+        return {"execution_status": False, "error_traceback": "Nessuna query SQL generata da eseguire."}
+    
+    db_manager = DatabaseManager(state["db_path"])
+    conn = db_manager.get_connection() # È già in mode=ro grazie al tuo database.py
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Ispezione Semantica: Forza un LIMIT 10 se non è presente per evitare payload enormi
+        # e per verificare rapidamente se la query restituisce dati vuoti.
+        check_query = query
+        if "LIMIT" not in check_query.upper():
+            check_query += "\nLIMIT 10"
+            
+        cursor.execute(check_query)
+        rows = cursor.fetchall()
+        
+        # Conversione dei risultati in dizionari
+        data_sample = [dict(row) for row in rows]
+        
+        # Data Inspection: Controllo del "risultato vuoto"
+        if len(data_sample) == 0:
+            msg_errore_logico = (
+                "L'esecuzione ha avuto successo sintatticamente, ma il risultato è vuoto (0 righe). "
+                "Potrebbe esserci un disallineamento nei filtri (WHERE), discrepanze di maiuscole/minuscole "
+                "nei valori testuali, o condizioni di JOIN troppo restrittive."
+            )
+            print("   ⚠️ (Sandbox) Anomalia semantica: Risultato vuoto rilevato.")
+            return {
+                "execution_status": False, 
+                "error_traceback": msg_errore_logico,
+                "data_sample": []
+            }
+            
+        print("   ✅ (Sandbox) Esecuzione sintatticamente e logicamente valida.")
+        return {
+            "execution_status": True,
+            "error_traceback": None,
+            "data_sample": data_sample
+        }
+        
+    except sqlite3.Error as e:
+        # Execution-Guided Feedback: Catturiamo lo stack trace reale del database
+        traceback_str = f"Errore SQLite ({type(e).__name__}): {str(e)}"
+        print(f"   ❌ (Sandbox) Errore di Runtime: {traceback_str}")
+        return {
+            "execution_status": False,
+            "error_traceback": traceback_str
+        }
+    finally:
+        conn.close()    
+
+async def run_query_critic(state: AgentState) -> Dict[str, Any]:
+    current_retries = state.get("retry_count", 0)
+    print(f"🕵️‍♂️ (Query Critic) Tentativo di correzione #{current_retries + 1}...")
+    
+    # 1. Context recovery
+    user_query = state["user_query"]
+    selected_tables = state["selected_tables"]
+    schema_ddl = state.get("candidate_tables_schema", "Schema non disponibile")
+    wrong_sql = state.get("generated_sql", "")
+    error_traceback = state.get("error_traceback", "Errore sconosciuto")
+    
+    # 2. Prompt formatting
+    prompt = QUERY_CRITIC_PROMPT.format(
+        user_query=user_query,
+        selected_tables=", ".join(selected_tables),
+        schema_ddl=schema_ddl,
+        wrong_sql=wrong_sql,
+        error_traceback=error_traceback
+    )
+    
+    #3. Invoking LLM with Structured Output
+    messages = [SystemMessage(content=prompt)]
+    structured_llm = llm_reasoning.with_structured_output(CriticResult).with_retry(stop_after_attempt=3)
+    
+    try:
+        response: CriticResult = structured_llm.invoke(messages)
+        
+        print(f"   💡 (Critic Plan): {response.correction_plan}")
+        print(f"   🔧 (New SQL): {response.corrected_sql}")
+        
+        # 4. Update the status
+        return {
+            "generated_sql": response.corrected_sql,
+            "retry_count": current_retries + 1,
+            # Reset the sandbox flags for the next cycle
+            "execution_status": None,
+            "error_traceback": None,
+            "data_sample": None
+        }
+    except Exception as e:
+        print(f"   ❌ (Critic) Errore durante la generazione della correzione: {e}")
+        return {
+            "retry_count": current_retries + 1,
+            "error": f"Errore del Critic Agent: {str(e)}"
+        }

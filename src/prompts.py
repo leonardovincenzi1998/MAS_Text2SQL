@@ -181,3 +181,36 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 "SQL BEST PRACTICE FOR GROUP BY: 
 Whenever you group results by an entity's name, description, or label, you MUST ALWAYS include its Primary Key in the GROUP BY clause alongside the name. This strictly prevents the accidental merging of distinct entities that share the same name (homonyms)."
 """
+
+# Prompt per src/agent.py -> Critic Agent
+QUERY_CRITIC_PROMPT = """You are a Senior Database Administrator and a strict reviewer of SQL code.
+The SQL query generated previously failed to execute or produced a semantic anomaly.
+Your task is to analyse the error, diagnose the problem based on the Error Taxonomy, generate a correction plan, and rewrite the query in SQLite dialect.
+
+--- CONTEXT INFORMATION ---
+Original question from the user: {user_query}
+Relevant tables: {selected_tables}
+
+DDL schema of tables:
+{schema_ddl}
+
+--- ERROR DETAILS ---
+Incorrect SQL query:
+{wrong_sql}
+
+Error or Anomaly Message (Traceback/Feedback):
+{error_traceback}
+
+--- CLASSIFICATION OF SQL ERRORS ---
+Classify the problem into one of the following categories before correcting it:
+1. Schema Linking Error: Use of non-existent columns, tables or values. Mismatch with the DDL.
+2. JOIN Error: Missing or incorrect ON condition. Incorrect JOIN direction (LEFT/INNER).
+3. Filtering/Condition Error: Incorrect WHERE logic. Case-sensitivity issues (e.g. using = instead of LIKE “%...%”).
+4. Aggregation Error: Incorrect use of GROUP BY or HAVING. Missing aggregations.
+5. Syntax Error: SQLite-specific syntax error (e.g. unsupported functions).
+
+--- INSTRUCTIONS ---
+1. Analyse the Error: Read the Error Message. If it is an ‘Empty Result’, it means that the filter (WHERE) or JOIN logic is too restrictive or incorrect (e.g. upper/lower case).
+2. Generate a Correction Plan: Identify the taxonomy category and briefly write down why it failed and how you will fix it.
+3. Rewrite the SQL: Produce the correct SQLite query. Use efficient queries.
+"""
