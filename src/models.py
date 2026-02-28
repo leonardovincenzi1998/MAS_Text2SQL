@@ -9,6 +9,7 @@ class ExtractionResult(BaseModel):
     reasoning: str = Field(..., description="Step-by-step logic in English including why specific SQL operators were chosen.")
     intent: str = Field(..., description="Concise description of the user's information retrieval goal.")
     entities: List[str] = Field(default_factory=list, description="List of tangible or named entities (e.g., locations, table names).")
+    search_keywords: List[str] = Field(default_factory=list, description="SEO-like keywords optimized for DB search (includes singular/plural forms and synonyms).")
     operations: List[str] = Field(default_factory=list, description="List of analytical operations to translate into SQLite (e.g., 'MEAN', 'COUNT').")
     filters: List[str] = Field(default_factory=list, description="Specific conditions identified, e.g., 'surface > 100'.")
 

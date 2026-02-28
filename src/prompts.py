@@ -43,7 +43,7 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 2. **Entity & Attribute Mapping**:
    - Identify possible tables (e.g., “Buildings”) and columns (e.g., “Surface area”) that can answer the user's question in detail.
    - **Crucial**: Keep the original Italian terminology. Do NOT translate "Terreni" to "Lands".
-   - Handle multi-word entities as a single string but also search lonely (e.g., "Codice Fiscale", "Destinazione d'uso").
+   - **Search Keywords Generation**: For every entity identified, generate root keywords optimized for a Lexical/Semantic Search Engine. Break down multi-word entities (e.g. "Area dipartimentale" -> "Area", "Dipartimento"). ALWAYS include both singular and plural forms (e.g., "Area", "Aree", "Locale", "Locali").
 
 3. **SQL Operation Mapping**:
    - **AGGREGATIONS**: If the users ask for aggregations or other operations map "quanto/quanti" to `COUNT`, "media" to `AVG`, "totale/somma" to `SUM`, "massimo" to `MAX`, "minimo" to `MIN`.
@@ -56,6 +56,7 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
   "reasoning": "Briefly explanation all in few sentences: the key entities, operations and possible filters detected, and why specific SQL operators were chosen.",
   "intent": "Concise summary in Italian.",
   "entities": ["list", "of", "italian", "terms"],
+  "search_keywords": ["area", "aree", "dipartimento", "bene", "beni", "mobile", "mobili", "cdg", "cdc"],
   "operations": ["SQL_KEYWORDS"],
   "filters": ["Specific conditions identified, e.g., 'superficie > 100'"]
 }}

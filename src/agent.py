@@ -141,12 +141,15 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     extraction = state.get("extraction_result")
     
     # vector query preparation
-    if extraction and extraction.entities:
-        # hybrid query combining original question and entities for keyword boost
+    if extraction and hasattr(extraction, 'search_keywords') and extraction.search_keywords:
+        # Use keywords optimised by LLM (which now include singular and plural forms)
+        keywords_str = " ".join(extraction.search_keywords)
+        # Keep the user query for semantic context, but give keywords enormous weight.
+        vector_search_query = f"{state['user_query']} {keywords_str} {keywords_str}"
+    elif extraction and extraction.entities:
         entities_str = " ".join(extraction.entities)
         vector_search_query = f"{state['user_query']} {entities_str}"
     else:
-        # fallback to the full query
         vector_search_query = state["user_query"]
         
     print(f"   Testo usato per Chroma: '{vector_search_query}'")
