@@ -7,7 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from src.utils import expand_selection_with_graph
-from src.models import AgentState, ExtractionResult, TableSelectionResult, CriticResult
+from src.models import AgentState, ExtractionResult, TableSelectionResult, CriticResult, ColumnSelectionResult
 from src.tools import search_schema_tool
 from src.database import DatabaseManager
 from src.config import LLM_MODEL_NAME, BASE_URL, API_KEY
@@ -15,7 +15,8 @@ from src.prompts import (
     ENTITY_EXTRACTOR_SYSTEM_PROMPT,
     TABLE_SELECTOR_SYSTEM_PROMPT,
     SQL_GENERATOR_SYSTEM_PROMPT,
-    QUERY_CRITIC_PROMPT
+    QUERY_CRITIC_PROMPT,
+    COLUMN_SELECTOR_SYSTEM_PROMPT
 )
 
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
@@ -227,6 +228,53 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"Errore Selector LLM: {str(e)}"}
 
+# node 2.5: targeted column selection (schema linking) to prune DDL
+async def run_column_selector(state: AgentState) -> Dict[str, Any]:
+    print("🎯 (Column Selector) Selezione mirata delle colonne (Schema Linking)...")
+    
+    selected_tables = state.get("selected_tables", [])
+    if not selected_tables:
+        return {"error": "Nessuna tabella passata al Column Selector."}
+
+    candidate_schema_str = state.get("candidate_tables_schema", "[]")
+    
+    # restrict the JSON to only the selected tables
+    try:
+        full_schema_list = json.loads(candidate_schema_str)
+        selected_schema_list = [
+            tbl for tbl in full_schema_list 
+            if tbl.get("table_name", tbl.get("table")) in selected_tables
+        ]
+        # generate the restricted Markdown for the LLM
+        markdown_context = format_schema_for_llm(selected_schema_list)
+    except Exception as e:
+        print(f"⚠️ Errore parsing schema nel Column Selector: {e}")
+        return {"error": f"Errore parsing schema nel Column Selector: {e}"}
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", COLUMN_SELECTOR_SYSTEM_PROMPT),
+        ("human", "DOMANDA UTENTE: {query}\n\nSCHEMA TABELLE SELEZIONATE:\n{schema}\n\nOutput:")
+    ])
+    
+    structured_llm = llm_reasoning.with_structured_output(ColumnSelectionResult).with_retry(stop_after_attempt=3)
+    chain = prompt | structured_llm
+    
+    try:
+        result: ColumnSelectionResult = await chain.ainvoke({
+            "query": state["user_query"],
+            "schema": markdown_context
+        })
+        
+        print(f"   -> 🧠 Ragionamento: {result.reasoning}")
+        print(f"   -> 📎 Colonne Scelte: {result.table_columns}")
+        
+        return {
+            "selected_columns": result.table_columns,
+            "messages": [f"✅ Colonne Selezionate:\n{result.table_columns}"]
+        }
+    except Exception as e:
+        return {"error": f"Errore Column Selector LLM: {str(e)}"}
+    
 # node 3: sql generation based on injected ddl, entities extraction and table selection
 async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     print("✍️  (SQL Generator) Iniezione DDL e generazione query...")
@@ -273,8 +321,20 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
                     words = line.strip().split()
                     if words:
                         col_name = words[0].replace('"', '').replace('[', '').replace(']', '')
+                        
+                        # Cross between JSON Ingestion and LLM Choices (Column Selector)
                         if col_name in colonne_pulite:
-                            pruned_ddl_lines.append(line)
+                            colonne_scelte_llm = state.get("selected_columns", {}).get(table, [])
+                            
+                            if colonne_scelte_llm:
+                                scelte_upper = [c.upper() for c in colonne_scelte_llm]
+                                
+                                # Keep the column if explicitly selected OR if it is an ID (JOIN safeguard)
+                                if col_name.upper() in scelte_upper or col_name.upper().startswith("ID"):
+                                    pruned_ddl_lines.append(line)
+                            else:
+                                # Fallback: if for some reason there are no choices for this table, keep them all clean.
+                                pruned_ddl_lines.append(line)
                 
                 # Rebuild the thinned-out DDL
                 clean_ddl = "\n".join(pruned_ddl_lines)

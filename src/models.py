@@ -24,12 +24,18 @@ class TableSelectionResult(BaseModel):
     relevant_tables: List[str] = Field(default_factory=list, description="Exact list of selected table names including bridge tables.")
     is_ambiguous: bool = Field(default=False, description="True if the query is too vague to select tables with certainty.")
 
+# Structured output for the column selection agent (Agent 2.5)
+class ColumnSelectionResult(BaseModel):
+    reasoning: str = Field(description="Brief explanation of why these columns were chosen for filters, JOINs or SELECTs.")
+    table_columns: Dict[str, List[str]] = Field(description="Dictionary with exact “table_name” as key and list of exact “column_names” as value.")
+    
 # Represents the state of the LangGraph multi-agent workflow
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     user_query: str
     db_path: str
     selected_tables: List[str]
+    selected_columns: Optional[Dict[str, List[str]]] = None
     extraction_result: Optional[ExtractionResult] = None
     candidate_tables_schema: Optional[str] = None
     pruned_ddl: Optional[str] = None 

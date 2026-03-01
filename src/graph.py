@@ -1,5 +1,5 @@
 from langgraph.graph import StateGraph, END
-from src.agent import run_entity_extractor, run_table_selector, run_sql_generator, run_execution_sandbox, run_query_critic
+from src.agent import run_entity_extractor, run_table_selector, run_column_selector, run_sql_generator, run_execution_sandbox, run_query_critic
 from src.models import AgentState
 
 # Conditional routing function
@@ -27,6 +27,7 @@ def create_workflow() -> StateGraph:
     # add the agents as nodes
     workflow.add_node("entity_extractor", run_entity_extractor)
     workflow.add_node("table_selector", run_table_selector)
+    workflow.add_node("column_selector", run_column_selector)
     workflow.add_node("sql_generator", run_sql_generator)
 
     workflow.add_node("execution_sandbox", run_execution_sandbox)
@@ -35,7 +36,8 @@ def create_workflow() -> StateGraph:
     # define the initial execution flow
     workflow.set_entry_point("entity_extractor")
     workflow.add_edge("entity_extractor", "table_selector")
-    workflow.add_edge("table_selector", "sql_generator")
+    workflow.add_edge("table_selector", "column_selector")
+    workflow.add_edge("column_selector", "sql_generator")
     workflow.add_edge("sql_generator", "execution_sandbox")
 
     workflow.add_conditional_edges(
