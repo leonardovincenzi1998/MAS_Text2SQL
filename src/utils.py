@@ -3,7 +3,7 @@ import os
 import json
 import sqlglot
 from sqlglot import exp, errors
-from typing import Tuple, List, Optional, Dict
+from typing import Any, Tuple, List, Optional, Dict
 from xml.parsers.expat import errors
 from cv2 import exp
 import networkx as nx
@@ -157,35 +157,46 @@ def validate_ast_and_format(
     selected_columns: Optional[Dict[str, List[str]]] = None
 ) -> Tuple[str, Optional[str]]:
     """
-    Usa sqlglot per analizzare l'AST, validare lo Schema Linking (Tabelle e Colonne)
-    e formattare la query.
+    Use sqlglot to analyse the AST, validate the Schema Linking (Tables and Columns)
+    and format the query. Includes protections for CTEs and aliases.
     """
     try:
         parsed_ast = sqlglot.parse_one(raw_sql, read="sqlite")
         
-        # --- 1. MAPPATURA TABELLE E ALIAS ---
+        # extract the names of the CTEs (es. WITH TabellaTemp AS ...)
+        valid_ctes = {cte.alias.lower() for cte in parsed_ast.find_all(exp.CTE) if cte.alias}
+        
+        # extract the aliases defined in the SELECT statements (e.g. SUM(Value) AS TotalValue)
+        valid_aliases = {alias.alias.lower() for alias in parsed_ast.find_all(exp.Alias) if alias.alias}
+
+        # tables and alias mapping
         alias_to_table = {}
         used_tables = []
         
         for table in parsed_ast.find_all(exp.Table):
-            real_name = table.name
+            real_name = table.name.lower()
+            
+            # CTE safeguard, ignore the temporary tables defined in the query
+            if real_name in valid_ctes:
+                continue
+                
             used_tables.append(real_name)
             
-            # Mappa il nome reale verso se stesso (in minuscolo)
-            alias_to_table[real_name.lower()] = real_name.lower()
-            # Mappa l'alias verso il nome reale (es. 'bm' -> 'benimobili')
+            # map the actual name to itself 
+            alias_to_table[real_name] = real_name
+            # Map the alias to the real name (e.g. “bm” -> “benimobili”)
             if table.alias:
-                alias_to_table[table.alias.lower()] = real_name.lower()
+                alias_to_table[table.alias.lower()] = real_name
 
-        # --- 2. VALIDAZIONE TABELLE ---
+        # tables validation
         selected_tables_lower = [t.lower() for t in selected_tables]
         for table in used_tables:
-            if table.lower() not in selected_tables_lower:
+            if table not in selected_tables_lower:
                 return raw_sql, f"AST Error (Schema Linking): La query usa la tabella '{table}', ma non è tra quelle autorizzate {selected_tables}."
 
-        # --- 3. VALIDAZIONE COLONNE ---
+        # columns validation (only for agent 2.5)
         if selected_columns:
-            # Creiamo un dizionario tutto minuscolo per confronti sicuri
+            # create an all-lowercase dictionary for safe comparisons
             allowed_cols_lower = {
                 t.lower(): [c.lower() for c in cols] 
                 for t, cols in selected_columns.items()
@@ -194,40 +205,39 @@ def validate_ast_and_format(
             for column in parsed_ast.find_all(exp.Column):
                 col_name = column.name.lower()
                 
-                # Ignoriamo il carattere jolly (*)
+                # ignore the wildcard character (*)
                 if isinstance(column, exp.Star) or col_name == "*":
                     continue
                     
-                # SALVAGUARDIA CHIAVI: Ignoriamo le colonne che iniziano per "id" 
-                # perché (come da tua logica in agent.py) vengono sempre passate per i JOIN
+                # key safeguarding: Ignore columns beginning with ‘id’
                 if col_name.startswith("id"):
+                    continue
+                    
+                # alias safeguard, ignore columns that are actually virtual aliases (e.g. used in ORDER BY)
+                if col_name in valid_aliases:
                     continue
 
                 col_table_alias = column.table.lower() if column.table else None
                 
                 if col_table_alias:
-                    # CASO A: Colonna qualificata (es. bm.Valore)
+                    # case a: bm.Valore
                     real_table = alias_to_table.get(col_table_alias)
                     
                     if real_table and real_table in allowed_cols_lower:
                         if col_name not in allowed_cols_lower[real_table]:
                             return raw_sql, f"AST Error (Column Linking): La colonna '{column.name}' non è autorizzata per la tabella '{real_table}'."
                 else:
-                    # CASO B: Colonna non qualificata (es. Valore)
-                    # Dobbiamo verificare se esiste in ALMENO UNA delle tabelle autorizzate e usate
+                    # case b: Valore
                     is_authorized = False
                     for t in used_tables:
-                        t_lower = t.lower()
-                        if t_lower in allowed_cols_lower and col_name in allowed_cols_lower[t_lower]:
+                        if t in allowed_cols_lower and col_name in allowed_cols_lower[t]:
                             is_authorized = True
                             break
                     
                     if not is_authorized:
-                         # Se la tabella non ha colonne in allowed_cols_lower (es. tabelle ponte aggiunte dal grafo), 
-                         # passiamo oltre, ma se stiamo validando una tabella di cui abbiamo il filtro e non c'è, è errore.
                          return raw_sql, f"AST Error (Column Linking): La colonna '{column.name}' usata nella query non è tra le colonne selezionate dall'Agente 2.5."
 
-        # --- 4. FORMATTAZIONE FINALE ---
+        # final formatting
         clean_sql = parsed_ast.sql(dialect="sqlite", pretty=True)
         return clean_sql, None
 
@@ -238,40 +248,76 @@ def validate_ast_and_format(
     
 def prune_ddl_ast(raw_ddl: str, allowed_columns: set) -> str:
     """
-    Fa il pruning di un DDL (CREATE TABLE) mantenendo solo le colonne autorizzate 
-    e i vincoli strutturali (PRIMARY KEY, FOREIGN KEY, ecc.), usando l'AST di SqlGlot.
+    Prune a DDL (CREATE TABLE) keeping only authorised columns
+    and structural constraints (PRIMARY KEY, FOREIGN KEY, etc.), using SqlGlot's AST.
     """
     try:
-        # 1. Parsing del DDL SQLite
+        # 1. parsing the SQLite DDL into an AST
         ast = sqlglot.parse_one(raw_ddl, read="sqlite")
         
-        # 2. Verifichiamo che sia effettivamente un'istruzione CREATE TABLE
+        # 2. verify that it is indeed a CREATE TABLE statement
         if isinstance(ast, exp.Create) and isinstance(ast.this, exp.Schema):
             new_expressions = []
             allowed_lower = {c.lower() for c in allowed_columns}
             
-            # 3. Iteriamo sugli elementi dentro le parentesi del CREATE TABLE (colonne e vincoli)
+            # 3. iterate over the elements inside the CREATE TABLE brackets (columns and constraints)
             for node in ast.this.expressions:
                 if isinstance(node, exp.ColumnDef):
                     col_name = node.name.lower()
-                    # Mantieni la colonna se è esplicitamente scelta
-                    # o se è una chiave (inizia con 'id') per garantire il corretto JOIN
+                    # keep the column if it is explicitly chosen
+                    # or if it is a key (starts with “id”) to ensure correct JOIN
                     if col_name in allowed_lower or col_name.startswith("id"):
                         new_expressions.append(node)
                 else:
-                    # Se è un vincolo di tabella (es. CONSTRAINT ... FOREIGN KEY ...)
-                    # Lo manteniamo per dare all'LLM il contesto logico delle relazioni
+                    # if it is a table constraint (e.g. CONSTRAINT ... FOREIGN KEY ...)
+                    # keep it to give the LLM the logical context of the relationships.
                     new_expressions.append(node)
             
-            # 4. Sostituiamo la lista di espressioni nell'AST con quella filtrata
+            # 4. replace the list of expressions in the AST with the filtered one
             ast.this.set("expressions", new_expressions)
             
-            # 5. Rigeneriamo l'SQL formattato (pretty=True indentifica bene per l'LLM)
+            # 5. we regenerate the formatted SQL (pretty=True identifies well for the LLM)
             return ast.sql(dialect="sqlite", pretty=True)
         else:
-            # Se non è un CREATE (es. un CREATE INDEX allegato), ritorniamo l'originale
+            # if it is not a CREATE (e.g. an attached CREATE INDEX), we return the original.
             return raw_ddl
             
     except Exception as e:
         print(f"⚠️ Impossibile eseguire il pruning AST sul DDL. Fallback al DDL grezzo. Errore: {e}")
         return raw_ddl
+    
+
+def get_schema_with_formatted_columns(schema_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Pre-calculates Markdown strings for each column (including FK and Sample).
+    Adds a “formatted_columns_dict” dictionary to each table in the schema.
+    """
+    for tbl in schema_list:
+        fks = tbl.get("foreign_keys", [])
+        samples = tbl.get("column_samples", {})
+        
+        # 1. pre-calculate fk_map once
+        fk_map = {}
+        for fk in fks:
+            from_col = fk.get("from_column")
+            to_tbl = fk.get("to_table_real") or fk.get("to_table_canonical")
+            to_col = fk.get("to_column")
+            if from_col and to_tbl:
+                fk_map[from_col] = f"{to_tbl}.{to_col}" if to_col else to_tbl
+                
+        # 2. pre-calculates enriched column strings and saves them in cache
+        formatted_cols = {}
+        for col in tbl.get("columns", []):
+            col_str = col
+            if col in fk_map:
+                col_str += f" [FK->{fk_map[col]}]"
+            if col in samples and samples[col]:
+                safe_samples = [str(s).replace('\n', ' ').replace('\r', '') for s in samples[col]]
+                col_str += f" (Esempi: {', '.join(safe_samples)})"
+            
+            formatted_cols[col] = col_str
+            
+        # 3. inject the cache directly into the table metadata
+        tbl["formatted_columns_dict"] = formatted_cols
+        
+    return schema_list

@@ -6,9 +6,8 @@ import sqlite3
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
-from src.utils import expand_selection_with_graph, validate_ast_and_format, prune_ddl_ast
+from src.utils import expand_selection_with_graph, validate_ast_and_format, prune_ddl_ast, get_schema_with_formatted_columns
 from src.models import AgentState, ExtractionResult, TableSelectionResult, CriticResult, ColumnSelectionResult
-
 from src.tools import search_schema_tool
 from src.database import DatabaseManager
 from src.config import LLM_MODEL_NAME, BASE_URL, API_KEY
@@ -87,51 +86,34 @@ async def run_entity_extractor(state: AgentState) -> Dict[str, Any]:
 
 # transforms the json schema into an optimized pseudo-markdown format for the llm
 def format_schema_for_llm(schema_list: list, selected_columns: Optional[Dict[str, List[str]]] = None) -> str:
+    """
+    Genera il Markdown leggendo le stringhe pre-calcolate, applicando solo il filtro delle colonne.
+    """
     formatted_tables = []
     
     for tbl in schema_list:
         name = tbl.get("table_name") or tbl.get("table", "Unknown")
         desc = tbl.get("description", tbl.get("desc", ""))
-        cols = tbl.get("columns", [])
-        fks = tbl.get("foreign_keys", [])
         cat_vals = tbl.get("categorical_values", "")
-        samples = tbl.get("column_samples", {})
         
-        # --- [FUNNEL STEP]: Pruning delle colonne per il Markdown ---
+        # retrieve the pre-calculated cache and raw columns
+        formatted_cols_dict = tbl.get("formatted_columns_dict", {})
+        raw_columns = tbl.get("columns", [])
+        
+        # FUNNEL STEP: Column filter
+        cols_to_keep = []
         if selected_columns and name in selected_columns:
             sc_upper = [c.upper() for c in selected_columns[name]]
-            # Teniamo la colonna solo se è stata scelta dall'Agente 2.5 o se è un ID
-            cols = [c for c in cols if c.upper() in sc_upper or c.upper().startswith("ID")]
-        # -----------------------------------------------------------
+            cols_to_keep = [c for c in raw_columns if c.upper() in sc_upper or c.upper().startswith("ID")]
+        else:
+            cols_to_keep = raw_columns
 
-        # quick fk mapping for annotation
-        fk_map = {}
-        for fk in fks:
-            from_col = fk.get("from_column")
-            to_tbl = fk.get("to_table_real") or fk.get("to_table_canonical")
-            to_col = fk.get("to_column")
-            if from_col and to_tbl:
-                target = f"{to_tbl}.{to_col}" if to_col else to_tbl
-                fk_map[from_col] = target
-                
-        # build column strings with fk annotations and data samples
-        col_tuples = []
-        for col in cols:
-            col_str = col
-            if col in fk_map:
-                col_str += f" [FK->{fk_map[col]}]"
+        # directly retrieve the string enriched by the dictionary
+        col_tuples = [formatted_cols_dict.get(col, col) for col in cols_to_keep]
             
-            if col in samples and samples[col]:
-                # clean up newlines to prevent markdown layout breakage
-                safe_samples = [str(s).replace('\n', ' ').replace('\r', '') for s in samples[col]]
-                col_str += f" (Esempi: {', '.join(safe_samples)})"
-                
-            col_tuples.append(col_str)
-                
-        # format as pseudo-markdown
+        # pseudo-markdown construction
         tbl_md = f"### Tabella: {name}\n"
         
-        # Print the description if it exists and is valid
         if desc and desc.strip() and desc != "Unknown": 
             tbl_md += f"Descrizione: {desc}\n"
             
@@ -173,6 +155,7 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     # parsing and markdown generation
     try:
         schema_list = json.loads(schema_json) if schema_json else []
+        schema_list = get_schema_with_formatted_columns(schema_list)
         candidate_tables = [t.get("table_name") or t.get("table") for t in schema_list if t.get("table_name") or t.get("table")]
         print(f"📦 (Table Selector) Candidate tables passate all'Agente 2: {len(candidate_tables)}")
         
@@ -299,7 +282,7 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     
     full_schema_list = state.get("parsed_schema", [])
 
-    #1. Clean DDL injection (Smart column pruning)
+    #1. clean DDL injection (Smart column pruning)
     try:
         for table in selected_tables:
             raw_ddl = db_manager.get_table_ddl(table)
@@ -309,26 +292,26 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
                 colonne_pulite = set(tbl_data.get("columns", []))
                 colonne_scelte_llm = state.get("selected_columns", {}).get(table, [])
                 
-                # Scegliamo le colonne autorizzate:
-                # Se l'Agente 2.5 ha scelto le colonne, usiamo quelle.
-                # Altrimenti usiamo tutte quelle pulite trovate in fase di Ingestion come fallback.
+                # choose the authorised columns:
+                # if Agent 2.5 has chosen the columns, use those
+                # otherwise, use all the clean ones found during Ingestion as a fallback
                 if colonne_scelte_llm:
                     allowed_cols = set(colonne_scelte_llm)
                 else:
                     allowed_cols = colonne_pulite
                 
-                # Deleghiamo la pulizia all'AST
+                # cleaning AST
                 clean_ddl = prune_ddl_ast(raw_ddl, allowed_cols)
                 ddl_context += f"-- Schema for {table}:\n{clean_ddl}\n\n"
             else:
-                # Security fallback: se non trova i metadati, passa il DDL intero
+                # security fallback: if it cannot find the metadata, pass the entire DDL
                 ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
     except Exception as e:
         return {"error": f"DDL extraction error: {str(e)}"}
 
-    # 2. Injection of Profiled Markdown (Only for selected tables)
+    # 2. injection of Profiled Markdown (Only for selected tables)
     try:
-        # Filter to keep only the tables confirmed by Agent 2
+        # filter to keep only the tables confirmed by Agent 2
         selected_schema_list = [
             tbl for tbl in full_schema_list 
             if tbl.get("table_name", tbl.get("table")) in selected_tables
@@ -375,7 +358,7 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         raw_sql = response.content.strip()
         clean_sql = raw_sql.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()
         
-# --- ESECUZIONE DEL VALIDATORE AST ---
+# execution of the ast validator
         print("   🔍 (AST Validator) Controllo conformità Tabelle e Colonne...")
         final_sql, validation_error = validate_ast_and_format(clean_sql, selected_tables, selected_columns)
         
@@ -383,7 +366,7 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
             print("   ⚠️ (AST Validator) Errore rilevato. Invio al Critic Agent.")
             return {
                 "generated_sql": final_sql,
-                "execution_status": False,  # Bypass Sandbox e innesca il Critic
+                "execution_status": False,  # bypass Sandbox and trigger Critic
                 "error_traceback": validation_error,
                 "messages": [f"❌ Generazione Fallita (AST):\n{validation_error}"]
             }
@@ -403,7 +386,7 @@ async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
 
     if state.get("execution_status") is False and state.get("error_traceback"):
         print(f"   ⏭️ (Sandbox) Esecuzione saltata a causa di un errore AST precedente.")
-        return {} # Non sovrascriviamo l'errore, lasciamo che il Router passi la palla al Critic
+        return {}
     
     query = state.get("generated_sql")
     if not query:
@@ -415,7 +398,7 @@ async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
     try:
         cursor = conn.cursor()
         
-        # Semantic Inspection: Enforce a LIMIT 10 if not present to avoid huge payloads
+        # semantic inspection: enforce a LIMIT 10 if not present to avoid huge payloads
         # and to quickly check if the query returns empty data.
         check_query = query
         if "LIMIT" not in check_query.upper():
@@ -424,10 +407,10 @@ async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
         cursor.execute(check_query)
         rows = cursor.fetchall()
         
-        # Converting results into dictionaries
+        # converting results into dictionaries
         data_sample = [dict(row) for row in rows]
         
-        # Data Inspection: Checking for ‘empty results’
+        # data Inspection: Checking for ‘empty results’
         if len(data_sample) == 0:
             msg_errore_logico = (
                 "L'esecuzione ha avuto successo sintatticamente, ma il risultato è vuoto (0 righe). "
@@ -463,20 +446,20 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
     current_retries = state.get("retry_count", 0)
     print(f"🕵️‍♂️ (Query Critic) Tentativo di correzione #{current_retries + 1}...")
     
-    # 1. Context recovery
+    # 1. context recovery
     user_query = state["user_query"]
     selected_tables = state["selected_tables"]
     wrong_sql = state.get("generated_sql", "")
     error_traceback = state.get("error_traceback", "Errore sconosciuto")
     
-    # 2. Reconstruction of the DDL for Critic
-    # Critic receives ALL columns saved in ingestion, bypassing the Column Selector
+    # 2. reconstruction of the DDL for Critic
+    # critic receives ALL columns saved in ingestion, bypassing the Column Selector
     db_manager = DatabaseManager(state["db_path"])
 
     full_schema_list = state.get("parsed_schema", [])
 
     try:        
-        # 1. Markdown reconstruction for Critic (only selected tables, but all columns to give it maximum context to understand the error)
+        # 1. markdown reconstruction for Critic (only selected tables, but all columns to give it maximum context to understand the error)
         selected_schema_list = [
             tbl for tbl in full_schema_list 
             if tbl.get("table_name", tbl.get("table")) in selected_tables
@@ -494,13 +477,13 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         
         if tbl_data:
             colonne_pulite = set(tbl_data.get("columns", []))
-            # Deleghiamo il pruning all'AST
+            
             clean_ddl = prune_ddl_ast(raw_ddl, colonne_pulite)
             critic_ddl_context += f"-- Schema for {table}:\n{clean_ddl}\n\n"
         else:
             critic_ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
     
-    # 3. Formattazione Prompt
+    # 3. prompt formatting
     prompt = QUERY_CRITIC_PROMPT.format(
         user_query=user_query,
         selected_tables=", ".join(selected_tables),
@@ -510,7 +493,7 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         error_traceback=error_traceback
     )
     
-    #4. Invoking LLM with Structured Output
+    #4. invoking LLM with Structured Output
     messages = [SystemMessage(content=prompt)]
     structured_llm = llm_reasoning.with_structured_output(CriticResult).with_retry(stop_after_attempt=3)
     
@@ -520,11 +503,11 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         print(f"   💡 (Critic Plan): {response.correction_plan}")
         print(f"   🔧 (New SQL): {response.corrected_sql}")
         
-        # 4. Update the status
+        # 4. update the status
         return {
             "generated_sql": response.corrected_sql,
             "retry_count": current_retries + 1,
-            # Reset the sandbox flags for the next cycle
+            # reset the sandbox flags for the next cycle
             "execution_status": None,
             "error_traceback": None,
             "data_sample": None
