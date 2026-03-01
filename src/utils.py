@@ -1,8 +1,12 @@
 import re
 import os
 import json
+import sqlglot
+from sqlglot import exp, errors
+from typing import Tuple, List, Optional, Dict
+from xml.parsers.expat import errors
+from cv2 import exp
 import networkx as nx
-from typing import List, Optional
 
 # cleans and standardizes table or column names to a canonical format
 # removes quotes, brackets, schema prefixes, and converts to lowercase
@@ -145,3 +149,129 @@ def expand_selection_with_graph(
     _log_debug(f"[GRAPH] final_real_names={final_real_names}")
     
     return final_real_names
+
+
+def validate_ast_and_format(
+    raw_sql: str, 
+    selected_tables: List[str], 
+    selected_columns: Optional[Dict[str, List[str]]] = None
+) -> Tuple[str, Optional[str]]:
+    """
+    Usa sqlglot per analizzare l'AST, validare lo Schema Linking (Tabelle e Colonne)
+    e formattare la query.
+    """
+    try:
+        parsed_ast = sqlglot.parse_one(raw_sql, read="sqlite")
+        
+        # --- 1. MAPPATURA TABELLE E ALIAS ---
+        alias_to_table = {}
+        used_tables = []
+        
+        for table in parsed_ast.find_all(exp.Table):
+            real_name = table.name
+            used_tables.append(real_name)
+            
+            # Mappa il nome reale verso se stesso (in minuscolo)
+            alias_to_table[real_name.lower()] = real_name.lower()
+            # Mappa l'alias verso il nome reale (es. 'bm' -> 'benimobili')
+            if table.alias:
+                alias_to_table[table.alias.lower()] = real_name.lower()
+
+        # --- 2. VALIDAZIONE TABELLE ---
+        selected_tables_lower = [t.lower() for t in selected_tables]
+        for table in used_tables:
+            if table.lower() not in selected_tables_lower:
+                return raw_sql, f"AST Error (Schema Linking): La query usa la tabella '{table}', ma non è tra quelle autorizzate {selected_tables}."
+
+        # --- 3. VALIDAZIONE COLONNE ---
+        if selected_columns:
+            # Creiamo un dizionario tutto minuscolo per confronti sicuri
+            allowed_cols_lower = {
+                t.lower(): [c.lower() for c in cols] 
+                for t, cols in selected_columns.items()
+            }
+            
+            for column in parsed_ast.find_all(exp.Column):
+                col_name = column.name.lower()
+                
+                # Ignoriamo il carattere jolly (*)
+                if isinstance(column, exp.Star) or col_name == "*":
+                    continue
+                    
+                # SALVAGUARDIA CHIAVI: Ignoriamo le colonne che iniziano per "id" 
+                # perché (come da tua logica in agent.py) vengono sempre passate per i JOIN
+                if col_name.startswith("id"):
+                    continue
+
+                col_table_alias = column.table.lower() if column.table else None
+                
+                if col_table_alias:
+                    # CASO A: Colonna qualificata (es. bm.Valore)
+                    real_table = alias_to_table.get(col_table_alias)
+                    
+                    if real_table and real_table in allowed_cols_lower:
+                        if col_name not in allowed_cols_lower[real_table]:
+                            return raw_sql, f"AST Error (Column Linking): La colonna '{column.name}' non è autorizzata per la tabella '{real_table}'."
+                else:
+                    # CASO B: Colonna non qualificata (es. Valore)
+                    # Dobbiamo verificare se esiste in ALMENO UNA delle tabelle autorizzate e usate
+                    is_authorized = False
+                    for t in used_tables:
+                        t_lower = t.lower()
+                        if t_lower in allowed_cols_lower and col_name in allowed_cols_lower[t_lower]:
+                            is_authorized = True
+                            break
+                    
+                    if not is_authorized:
+                         # Se la tabella non ha colonne in allowed_cols_lower (es. tabelle ponte aggiunte dal grafo), 
+                         # passiamo oltre, ma se stiamo validando una tabella di cui abbiamo il filtro e non c'è, è errore.
+                         return raw_sql, f"AST Error (Column Linking): La colonna '{column.name}' usata nella query non è tra le colonne selezionate dall'Agente 2.5."
+
+        # --- 4. FORMATTAZIONE FINALE ---
+        clean_sql = parsed_ast.sql(dialect="sqlite", pretty=True)
+        return clean_sql, None
+
+    except errors.ParseError as e:
+        return raw_sql, f"AST Syntax Error: La query generata non è sintatticamente valida per SQLite. Dettagli: {str(e)}"
+    except Exception as e:
+        return raw_sql, f"AST Validation Error: Eccezione durante la validazione dell'AST: {str(e)}"
+    
+def prune_ddl_ast(raw_ddl: str, allowed_columns: set) -> str:
+    """
+    Fa il pruning di un DDL (CREATE TABLE) mantenendo solo le colonne autorizzate 
+    e i vincoli strutturali (PRIMARY KEY, FOREIGN KEY, ecc.), usando l'AST di SqlGlot.
+    """
+    try:
+        # 1. Parsing del DDL SQLite
+        ast = sqlglot.parse_one(raw_ddl, read="sqlite")
+        
+        # 2. Verifichiamo che sia effettivamente un'istruzione CREATE TABLE
+        if isinstance(ast, exp.Create) and isinstance(ast.this, exp.Schema):
+            new_expressions = []
+            allowed_lower = {c.lower() for c in allowed_columns}
+            
+            # 3. Iteriamo sugli elementi dentro le parentesi del CREATE TABLE (colonne e vincoli)
+            for node in ast.this.expressions:
+                if isinstance(node, exp.ColumnDef):
+                    col_name = node.name.lower()
+                    # Mantieni la colonna se è esplicitamente scelta
+                    # o se è una chiave (inizia con 'id') per garantire il corretto JOIN
+                    if col_name in allowed_lower or col_name.startswith("id"):
+                        new_expressions.append(node)
+                else:
+                    # Se è un vincolo di tabella (es. CONSTRAINT ... FOREIGN KEY ...)
+                    # Lo manteniamo per dare all'LLM il contesto logico delle relazioni
+                    new_expressions.append(node)
+            
+            # 4. Sostituiamo la lista di espressioni nell'AST con quella filtrata
+            ast.this.set("expressions", new_expressions)
+            
+            # 5. Rigeneriamo l'SQL formattato (pretty=True indentifica bene per l'LLM)
+            return ast.sql(dialect="sqlite", pretty=True)
+        else:
+            # Se non è un CREATE (es. un CREATE INDEX allegato), ritorniamo l'originale
+            return raw_ddl
+            
+    except Exception as e:
+        print(f"⚠️ Impossibile eseguire il pruning AST sul DDL. Fallback al DDL grezzo. Errore: {e}")
+        return raw_ddl

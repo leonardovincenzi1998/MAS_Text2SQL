@@ -37,7 +37,7 @@ class AgentState(TypedDict):
     selected_tables: List[str]
     selected_columns: Optional[Dict[str, List[str]]] = None
     extraction_result: Optional[ExtractionResult] = None
-    candidate_tables_schema: Optional[str] = None
+    parsed_schema: Optional[List[Dict[str, Any]]] = None
     generated_sql: Optional[str] = None
     error: Optional[str] = None
 

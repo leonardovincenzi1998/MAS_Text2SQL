@@ -6,8 +6,9 @@ import sqlite3
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
-from src.utils import expand_selection_with_graph
+from src.utils import expand_selection_with_graph, validate_ast_and_format, prune_ddl_ast
 from src.models import AgentState, ExtractionResult, TableSelectionResult, CriticResult, ColumnSelectionResult
+
 from src.tools import search_schema_tool
 from src.database import DatabaseManager
 from src.config import LLM_MODEL_NAME, BASE_URL, API_KEY
@@ -228,7 +229,7 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
         
         return {
             "selected_tables": final_selection,
-            "candidate_tables_schema": schema_json,
+            "parsed_schema": schema_list, 
             "messages": [log_msg]
         }
         
@@ -243,20 +244,19 @@ async def run_column_selector(state: AgentState) -> Dict[str, Any]:
     if not selected_tables:
         return {"error": "Nessuna tabella passata al Column Selector."}
 
-    candidate_schema_str = state.get("candidate_tables_schema", "[]")
     
     # restrict the JSON to only the selected tables
-    try:
-        full_schema_list = json.loads(candidate_schema_str)
-        selected_schema_list = [
-            tbl for tbl in full_schema_list 
-            if tbl.get("table_name", tbl.get("table")) in selected_tables
-        ]
-        # generate the restricted Markdown for the LLM
-        markdown_context = format_schema_for_llm(selected_schema_list)
-    except Exception as e:
-        print(f"⚠️ Errore parsing schema nel Column Selector: {e}")
-        return {"error": f"Errore parsing schema nel Column Selector: {e}"}
+    full_schema_list = state.get("parsed_schema", [])
+
+    if not full_schema_list:
+        return {"error": "Schema parsato non trovato nello stato."}
+
+    selected_schema_list = [
+        tbl for tbl in full_schema_list 
+        if tbl.get("table_name", tbl.get("table")) in selected_tables
+    ]
+    markdown_context = format_schema_for_llm(selected_schema_list)
+
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", COLUMN_SELECTOR_SYSTEM_PROMPT),
@@ -288,66 +288,40 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     
     # retrieve selected tables from previous agent
     selected_tables = state.get("selected_tables", [])
+
+    selected_columns = state.get("selected_columns", {})
+
     if not selected_tables:
         return {"error": "No tables selected by Agent 2."}
         
     db_manager = DatabaseManager(state["db_path"])
     ddl_context = ""
-    candidate_schema_str = state.get("candidate_tables_schema", "[]")
     
-    # Parse securely the metadata saved in ChromaDB (the ‘Slim Schema’ generated in Ingestion)
-    try:
-        full_schema_list = json.loads(candidate_schema_str)
-    except Exception as e:
-        print(f"⚠️ Fallito il parsing del candidate_schema_str: {e}")
-        full_schema_list = []
+    full_schema_list = state.get("parsed_schema", [])
 
     #1. Clean DDL injection (Smart column pruning)
     try:
         for table in selected_tables:
-            
             raw_ddl = db_manager.get_table_ddl(table)
-            
-            # Search for the table in Chroma's metadata to get clean columns
             tbl_data = next((t for t in full_schema_list if t.get("table_name", t.get("table")) == table), None)
             
             if tbl_data:
                 colonne_pulite = set(tbl_data.get("columns", []))
-                ddl_lines = raw_ddl.split('\n')
-                pruned_ddl_lines = []
+                colonne_scelte_llm = state.get("selected_columns", {}).get(table, [])
                 
-                for line in ddl_lines:
-                    line_upper = line.upper()
-                    
-                    # Always keep the header, brackets, constraints and keys
-                    if any(keyword in line_upper for keyword in ["CREATE TABLE", ");", "CONSTRAINT", "PRIMARY KEY", "FOREIGN KEY"]):
-                        pruned_ddl_lines.append(line)
-                        continue
-                        
-                    # For column definitions, check whether the column name is in the “clean” list
-                    words = line.strip().split()
-                    if words:
-                        col_name = words[0].replace('"', '').replace('[', '').replace(']', '')
-                        
-                        # Cross between JSON Ingestion and LLM Choices (Column Selector)
-                        if col_name in colonne_pulite:
-                            colonne_scelte_llm = state.get("selected_columns", {}).get(table, [])
-                            
-                            if colonne_scelte_llm:
-                                scelte_upper = [c.upper() for c in colonne_scelte_llm]
-                                
-                                # Keep the column if explicitly selected OR if it is an ID (JOIN safeguard)
-                                if col_name.upper() in scelte_upper or col_name.upper().startswith("ID"):
-                                    pruned_ddl_lines.append(line)
-                            else:
-                                # Fallback: if for some reason there are no choices for this table, keep them all clean.
-                                pruned_ddl_lines.append(line)
+                # Scegliamo le colonne autorizzate:
+                # Se l'Agente 2.5 ha scelto le colonne, usiamo quelle.
+                # Altrimenti usiamo tutte quelle pulite trovate in fase di Ingestion come fallback.
+                if colonne_scelte_llm:
+                    allowed_cols = set(colonne_scelte_llm)
+                else:
+                    allowed_cols = colonne_pulite
                 
-                # Rebuild the thinned-out DDL
-                clean_ddl = "\n".join(pruned_ddl_lines)
+                # Deleghiamo la pulizia all'AST
+                clean_ddl = prune_ddl_ast(raw_ddl, allowed_cols)
                 ddl_context += f"-- Schema for {table}:\n{clean_ddl}\n\n"
             else:
-                # Security fallback: if it cannot find the metadata, pass the entire DDL
+                # Security fallback: se non trova i metadati, passa il DDL intero
                 ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
     except Exception as e:
         return {"error": f"DDL extraction error: {str(e)}"}
@@ -401,9 +375,24 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         raw_sql = response.content.strip()
         clean_sql = raw_sql.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()
         
+# --- ESECUZIONE DEL VALIDATORE AST ---
+        print("   🔍 (AST Validator) Controllo conformità Tabelle e Colonne...")
+        final_sql, validation_error = validate_ast_and_format(clean_sql, selected_tables, selected_columns)
+        
+        if validation_error:
+            print("   ⚠️ (AST Validator) Errore rilevato. Invio al Critic Agent.")
+            return {
+                "generated_sql": final_sql,
+                "execution_status": False,  # Bypass Sandbox e innesca il Critic
+                "error_traceback": validation_error,
+                "messages": [f"❌ Generazione Fallita (AST):\n{validation_error}"]
+            }
+        
+        print("   ✅ (AST Validator) Sintassi e Schema Linking confermati.")
+
         return {
-            "generated_sql": clean_sql,
-            "messages": [f"✅ SQL Generato:\n{clean_sql}"]
+            "generated_sql": final_sql,
+            "messages": [f"✅ SQL Generato:\n{final_sql}"]
         }
         
     except Exception as e:
@@ -412,6 +401,10 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
 async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
     print("🛠️  (Execution Sandbox) Esecuzione query in ambiente isolato...")
 
+    if state.get("execution_status") is False and state.get("error_traceback"):
+        print(f"   ⏭️ (Sandbox) Esecuzione saltata a causa di un errore AST precedente.")
+        return {} # Non sovrascriviamo l'errore, lasciamo che il Router passi la palla al Critic
+    
     query = state.get("generated_sql")
     if not query:
         return {"execution_status": False, "error_traceback": "Nessuna query SQL generata da eseguire."}
@@ -479,46 +472,31 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
     # 2. Reconstruction of the DDL for Critic
     # Critic receives ALL columns saved in ingestion, bypassing the Column Selector
     db_manager = DatabaseManager(state["db_path"])
-    candidate_schema_str = state.get("candidate_tables_schema", "[]")
 
-    try:
-        full_schema_list = json.loads(candidate_schema_str)
-        
-        # 1. Ricostruzione Markdown panoramico
+    full_schema_list = state.get("parsed_schema", [])
+
+    try:        
+        # 1. Markdown reconstruction for Critic (only selected tables, but all columns to give it maximum context to understand the error)
         selected_schema_list = [
             tbl for tbl in full_schema_list 
             if tbl.get("table_name", tbl.get("table")) in selected_tables
         ]
-        critic_markdown_context = format_schema_for_llm(selected_schema_list) # Senza filtri colonne
-        
+        critic_markdown_context = format_schema_for_llm(selected_schema_list) 
     except Exception:
         full_schema_list = []
         critic_markdown_context = "Nessun profilo dati disponibile"
 
     critic_ddl_context = ""
-    # 2. Ricostruzione DDL panoramico
+    # 2. DDL reconstruction
     for table in selected_tables:
         raw_ddl = db_manager.get_table_ddl(table)
         tbl_data = next((t for t in full_schema_list if t.get("table_name", t.get("table")) == table), None)
         
         if tbl_data:
             colonne_pulite = set(tbl_data.get("columns", []))
-            ddl_lines = raw_ddl.split('\n')
-            pruned_ddl_lines = []
-            
-            for line in ddl_lines:
-                line_upper = line.upper()
-                if any(keyword in line_upper for keyword in ["CREATE TABLE", ");", "CONSTRAINT", "PRIMARY KEY", "FOREIGN KEY"]):
-                    pruned_ddl_lines.append(line)
-                    continue
-                    
-                words = line.strip().split()
-                if words:
-                    col_name = words[0].replace('"', '').replace('[', '').replace(']', '')
-                    if col_name in colonne_pulite:
-                        pruned_ddl_lines.append(line)
-            
-            critic_ddl_context += f"-- Schema for {table}:\n" + "\n".join(pruned_ddl_lines) + "\n\n"
+            # Deleghiamo il pruning all'AST
+            clean_ddl = prune_ddl_ast(raw_ddl, colonne_pulite)
+            critic_ddl_context += f"-- Schema for {table}:\n{clean_ddl}\n\n"
         else:
             critic_ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
     
