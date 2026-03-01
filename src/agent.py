@@ -1,7 +1,7 @@
 import json
 import warnings
 import re
-from typing import Dict, Any
+from typing import Dict, List, Optional, Any
 import sqlite3
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -85,7 +85,7 @@ async def run_entity_extractor(state: AgentState) -> Dict[str, Any]:
         return {"error": f"Errore Extractor: {str(e)}"}
 
 # transforms the json schema into an optimized pseudo-markdown format for the llm
-def format_schema_for_llm(schema_list: list) -> str:
+def format_schema_for_llm(schema_list: list, selected_columns: Optional[Dict[str, List[str]]] = None) -> str:
     formatted_tables = []
     
     for tbl in schema_list:
@@ -96,6 +96,13 @@ def format_schema_for_llm(schema_list: list) -> str:
         cat_vals = tbl.get("categorical_values", "")
         samples = tbl.get("column_samples", {})
         
+        # --- [FUNNEL STEP]: Pruning delle colonne per il Markdown ---
+        if selected_columns and name in selected_columns:
+            sc_upper = [c.upper() for c in selected_columns[name]]
+            # Teniamo la colonna solo se è stata scelta dall'Agente 2.5 o se è un ID
+            cols = [c for c in cols if c.upper() in sc_upper or c.upper().startswith("ID")]
+        # -----------------------------------------------------------
+
         # quick fk mapping for annotation
         fk_map = {}
         for fk in fks:
@@ -352,7 +359,7 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
             tbl for tbl in full_schema_list 
             if tbl.get("table_name", tbl.get("table")) in selected_tables
         ]
-        markdown_context = format_schema_for_llm(selected_schema_list)
+        markdown_context = format_schema_for_llm(selected_schema_list, state.get("selected_columns"))
     except Exception as e:
         print(f"⚠️ Impossibile generare il markdown per l'Agente 3: {e}")
         markdown_context = "Nessun profilo dati disponibile."
@@ -396,8 +403,6 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         
         return {
             "generated_sql": clean_sql,
-            "pruned_ddl": ddl_context,
-            "markdown_context": markdown_context,
             "messages": [f"✅ SQL Generato:\n{clean_sql}"]
         }
         
@@ -468,22 +473,66 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
     # 1. Context recovery
     user_query = state["user_query"]
     selected_tables = state["selected_tables"]
-    schema_ddl = state.get("pruned_ddl", "Schema non disponibile")
-    markdown_context = state.get("markdown_context", "Nessun profilo dati disponibile")
     wrong_sql = state.get("generated_sql", "")
     error_traceback = state.get("error_traceback", "Errore sconosciuto")
     
-    # 2. Prompt formatting
+    # 2. Reconstruction of the DDL for Critic
+    # Critic receives ALL columns saved in ingestion, bypassing the Column Selector
+    db_manager = DatabaseManager(state["db_path"])
+    candidate_schema_str = state.get("candidate_tables_schema", "[]")
+
+    try:
+        full_schema_list = json.loads(candidate_schema_str)
+        
+        # 1. Ricostruzione Markdown panoramico
+        selected_schema_list = [
+            tbl for tbl in full_schema_list 
+            if tbl.get("table_name", tbl.get("table")) in selected_tables
+        ]
+        critic_markdown_context = format_schema_for_llm(selected_schema_list) # Senza filtri colonne
+        
+    except Exception:
+        full_schema_list = []
+        critic_markdown_context = "Nessun profilo dati disponibile"
+
+    critic_ddl_context = ""
+    # 2. Ricostruzione DDL panoramico
+    for table in selected_tables:
+        raw_ddl = db_manager.get_table_ddl(table)
+        tbl_data = next((t for t in full_schema_list if t.get("table_name", t.get("table")) == table), None)
+        
+        if tbl_data:
+            colonne_pulite = set(tbl_data.get("columns", []))
+            ddl_lines = raw_ddl.split('\n')
+            pruned_ddl_lines = []
+            
+            for line in ddl_lines:
+                line_upper = line.upper()
+                if any(keyword in line_upper for keyword in ["CREATE TABLE", ");", "CONSTRAINT", "PRIMARY KEY", "FOREIGN KEY"]):
+                    pruned_ddl_lines.append(line)
+                    continue
+                    
+                words = line.strip().split()
+                if words:
+                    col_name = words[0].replace('"', '').replace('[', '').replace(']', '')
+                    if col_name in colonne_pulite:
+                        pruned_ddl_lines.append(line)
+            
+            critic_ddl_context += f"-- Schema for {table}:\n" + "\n".join(pruned_ddl_lines) + "\n\n"
+        else:
+            critic_ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
+    
+    # 3. Formattazione Prompt
     prompt = QUERY_CRITIC_PROMPT.format(
         user_query=user_query,
         selected_tables=", ".join(selected_tables),
-        schema_ddl=schema_ddl,
-        markdown_context=markdown_context,
+        schema_ddl=critic_ddl_context,
+        markdown_context=critic_markdown_context,
         wrong_sql=wrong_sql,
         error_traceback=error_traceback
     )
     
-    #3. Invoking LLM with Structured Output
+    #4. Invoking LLM with Structured Output
     messages = [SystemMessage(content=prompt)]
     structured_llm = llm_reasoning.with_structured_output(CriticResult).with_retry(stop_after_attempt=3)
     
