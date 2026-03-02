@@ -75,6 +75,9 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
             "query": state["user_query"],
             "ext_context": ext_context
         })
+
+        print(f"   -> 🧠 Ragionamento: {result.reasoning}")
+        print(f"   -> 📎 Tabelle Scelte (LLM): {result.relevant_tables}")
         
         # 1. base llm selection
         llm_selection = result.relevant_tables

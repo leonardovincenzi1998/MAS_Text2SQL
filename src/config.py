@@ -36,10 +36,10 @@ llm_reasoning = ChatOpenAI(
     model=LLM_MODEL_NAME,
     openai_api_base=BASE_URL,
     openai_api_key=API_KEY,
-    temperature=0.1,
+    temperature=0.2,
     #max_tokens=2000,
-    presence_penalty=0.2,
-    frequency_penalty=0.2
+    presence_penalty=0.3,
+    frequency_penalty=0.3
 )
 
 # # 2. LLM for Agent 3 (SQL Generation)

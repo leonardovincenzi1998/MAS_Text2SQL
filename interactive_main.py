@@ -80,37 +80,24 @@ async def main():
             if final_state.get("error"):
                 print(f"❌ Errore durante l'esecuzione: {final_state['error']}")
             else:
-                print("🚀 ESTRAZIONE E SELEZIONE COMPLETATA")
-                
-                # agent 1: entity extraction stats
-                if final_state.get("extraction_result"):
-                    res = final_state['extraction_result']
-                    ops = getattr(res, 'operations', []) 
-                    print(f"\n📋 [Agente 1] Intento:     {res.intent}")
-                    print(f"🔑 [Agente 1] Entità:      {res.entities}")
-                    print(f"⚙️  [Agente 1] Operazioni:  {ops}") 
-                else:
-                    print("\n⚠️ Nessun risultato di estrazione trovato.")
+                print("🚀 ESTRAZIONE E SELEZIONE COMPLETATA\n")
+
+                # agent 1: extraction stats
+                extraction = final_state.get("extraction_result")
+                if extraction:
+                    print(f"📋 [Agente 1] Intento:     {getattr(extraction, 'intent', 'N/A')}")
+                    print(f"🔑 [Agente 1] Entità:      {getattr(extraction, 'entities', [])}")
+                    print(f"⚙️  [Agente 1] Operazioni:  {getattr(extraction, 'operations', [])}")
 
                 # vector db stats
                 print("\n📚 [Vector DB] Schema Recuperato:")
                 if final_state.get("parsed_schema"):
-                    schema_len = len(final_state['parsed_schema'])
-                    print(f"   (JSON Schema trovato, lunghezza: {schema_len} caratteri)")
+                    schema_len = len(str(final_state['parsed_schema']))
+                    print(f"   (JSON Schema trovato, lunghezza stimata: {schema_len} caratteri)")
                 else:
                     print("   Nessuno schema trovato.")
 
-                # agent 2: table selection result
-                print("\n🎯 [Agente 2] TABELLE SELEZIONATE:")
-                print(final_state.get("selected_tables", "Nessuna tabella selezionata"))
-                
-                #agent 2.5: column selection result
-                if final_state.get("selected_columns"):
-                    print("\n🎯 [Agente 2.5] COLONNE SELEZIONATE (Schema Linking):")
-                    for table, cols in final_state["selected_columns"].items():
-                        print(f"   {table}: {cols}")
-
-                # final reasoning log
+                # final reasoning log in ordine cronologico (Agente 2 -> Agente 2.5)
                 messages = final_state.get("messages", [])
                 for msg in messages:
                     content = msg.content if hasattr(msg, 'content') else str(msg)
@@ -123,8 +110,6 @@ async def main():
                 if final_state.get("generated_sql"):
                     print(f"\n✍️  [Agente 3] SQL GENERATO:")
                     print(final_state["generated_sql"])
-
-          
 
             print("-" * 50)
             print("\n" + "x" * 50 + "\n")

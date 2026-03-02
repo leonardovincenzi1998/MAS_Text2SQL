@@ -105,13 +105,21 @@ export HF_HOME=/scratch.hpc/leonardo.vincenzi/hf_cache
 # 3. Scarica i pesi quantizzati di Llama 3.3 70B
 huggingface-cli download hugging-quants/Meta-Llama-3.3-70B-Instruct-AWQ-INT4
 
-
-
+#Quando crasha ma non esco da srun, per riavviare Server vLLM:
 pkill -f vllm
 nvidia-smi
 pkill -9 -f ray
 pkill -9 -f python
 
+#Quando entro e devo solo lanciare .sh:
+cd ../../../scratch/leonardo.vincenzi
+source venv/bin/activate
+cd mas_text2sql
+./cluster/start_session.sh
+
+
+screen -S attesa
+[detached from 1083690.attesa]
 
 
 Passo 1: Installare la libreria per BM25
