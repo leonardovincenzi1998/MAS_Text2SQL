@@ -2,7 +2,7 @@ from typing import Dict, Any
 from langchain_core.prompts import ChatPromptTemplate
 from src.models import AgentState
 from src.database import DatabaseManager
-from src.utils import validate_ast_and_format, prune_ddl_ast, format_schema_for_llm
+from src.utils import validate_ast_and_format, prune_ddl_ast, format_schema_for_llm, format_table_metadata_as_sql_comment
 from src.config import llm_sql
 from src.prompts import SQL_GENERATOR_SYSTEM_PROMPT
 
@@ -12,7 +12,6 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     
     # retrieve selected tables from previous agent
     selected_tables = state.get("selected_tables", [])
-
     selected_columns = state.get("selected_columns", {})
 
     if not selected_tables:
@@ -43,24 +42,24 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
                 
                 # cleaning AST
                 clean_ddl = prune_ddl_ast(raw_ddl, allowed_cols)
-                ddl_context += f"-- Schema for {table}:\n{clean_ddl}\n\n"
+
+                # sql comments generation with metadata
+                meta_comment = format_table_metadata_as_sql_comment(tbl_data, allowed_cols)
+                ddl_context += f"-- Schema for {table}:\n{clean_ddl}\n{meta_comment}\n\n"
             else:
                 # security fallback: if it cannot find the metadata, pass the entire DDL
                 ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
+
+        #DEBUG: save the enriched DDL context to a file for inspection
+        with open("debug_enriched_ddl.sql", "w", encoding="utf-8") as f:
+            f.write(ddl_context)
+        print("   💾 (SQL Generator) DDL arricchito salvato in 'debug_enriched_ddl.sql'")
+        
+    except Exception as e:
+        return {"error": f"DDL extraction error: {str(e)}"}    
+                
     except Exception as e:
         return {"error": f"DDL extraction error: {str(e)}"}
-
-    # 2. injection of Profiled Markdown (Only for selected tables)
-    try:
-        # filter to keep only the tables confirmed by Agent 2
-        selected_schema_list = [
-            tbl for tbl in full_schema_list 
-            if tbl.get("table_name", tbl.get("table")) in selected_tables
-        ]
-        markdown_context = format_schema_for_llm(selected_schema_list, state.get("selected_columns"))
-    except Exception as e:
-        print(f"⚠️ Impossibile generare il markdown per l'Agente 3: {e}")
-        markdown_context = "Nessun profilo dati disponibile."
 
     # format analytical context from agent 1
     extraction = state.get("extraction_result")
@@ -96,15 +95,13 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", SQL_GENERATOR_SYSTEM_PROMPT),
-        ("human", "### CONTESTO\n[DDL SCHEMA (SINTASSI)]\n{ddl_context}\n\n[PROFILO DATI E VALORI CATEGORICI (MARKDOWN)]\n{markdown_context}\n\n[INFO ESTRATTE]\n{extracted_info}\n\n[SUGGERIMENTO JOIN LOGIC]\n{reasoning}\n\n### DOMANDA UTENTE\n{query}\n\nOutput:")
-    ])
+        ("human", "### CONTESTO\n[ENRICHED DDL SCHEMA]\n{ddl_context}\n\n[INFO ESTRATTE]\n{extracted_info}\n{entity_hints}\n\n[SUGGERIMENTO JOIN LOGIC]\n{reasoning}\n\n### DOMANDA UTENTE\n{query}\n\nOutput:")    ])
     
     chain = prompt | llm_sql
 
     try:
         response = await chain.ainvoke({
             "ddl_context": ddl_context,
-            "markdown_context": markdown_context,
             "extracted_info": extracted_info,
             "reasoning": combined_reasoning,
             "entity_hints": entity_hints,

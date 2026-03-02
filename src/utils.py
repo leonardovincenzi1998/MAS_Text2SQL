@@ -363,3 +363,45 @@ def get_schema_with_formatted_columns(schema_list: List[Dict[str, Any]]) -> List
         tbl["formatted_columns_dict"] = formatted_cols
         
     return schema_list
+
+def format_table_metadata_as_sql_comment(tbl_data: dict, allowed_cols: set) -> str:
+    """
+    Converte i metadati di una tabella (descrizioni, valori unici/sample) 
+    in un blocco di commenti SQL, includendo solo le colonne permesse.
+    """
+    if not tbl_data:
+        return ""
+
+    table_name = tbl_data.get("table_name", tbl_data.get("table", "Unknown"))
+    
+    # Inizializza il blocco di commenti
+    comments = [f"/* METADATA AND COLUMN PROFILES FOR TABLE '{table_name}':"]
+    
+    # Adatta questo ciclo in base alla struttura esatta del tuo tbl_data 
+    # (assumo che ci sia una lista di dict o un dict di dict per le colonne)
+    columns_info = tbl_data.get("column_metadata", []) 
+    
+    # Se il tuo JSON salva i metadati diversamente, adatta le chiavi qui sotto:
+    has_metadata = False
+    for col_info in columns_info:
+        col_name = col_info.get("name", "")
+        
+        # Salta le colonne scartate dal Column Selector
+        if col_name not in allowed_cols:
+            continue
+            
+        meta_parts = []
+        if col_info.get("description"):
+            meta_parts.append(f"Description: {col_info['description']}")
+        if col_info.get("distinct_values"):
+            meta_parts.append(f"Categorical Values: {col_info['distinct_values']}")
+        elif col_info.get("sample_values"):
+            meta_parts.append(f"Samples: {col_info['sample_values']}")
+            
+        if meta_parts:
+            has_metadata = True
+            comments.append(f" - {col_name}: {' | '.join(meta_parts)}")
+            
+    comments.append("*/")
+    
+    return "\n".join(comments) if has_metadata else ""

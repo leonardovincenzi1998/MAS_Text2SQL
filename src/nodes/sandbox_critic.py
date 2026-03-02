@@ -3,7 +3,7 @@ from typing import Dict, Any
 from langchain_core.messages import SystemMessage
 from src.models import AgentState, CriticResult
 from src.database import DatabaseManager
-from src.utils import prune_ddl_ast, format_schema_for_llm
+from src.utils import prune_ddl_ast, format_table_metadata_as_sql_comment
 from src.config import llm_reasoning
 from src.prompts import QUERY_CRITIC_PROMPT
 
@@ -85,19 +85,8 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
 
     full_schema_list = state.get("parsed_schema", [])
 
-    try:        
-        # 1. markdown reconstruction for Critic (only selected tables, but all columns to give it maximum context to understand the error)
-        selected_schema_list = [
-            tbl for tbl in full_schema_list 
-            if tbl.get("table_name", tbl.get("table")) in selected_tables
-        ]
-        critic_markdown_context = format_schema_for_llm(selected_schema_list) 
-    except Exception:
-        full_schema_list = []
-        critic_markdown_context = "Nessun profilo dati disponibile"
-
     critic_ddl_context = ""
-    # 2. DDL reconstruction
+    # 1. DDL reconstruction
     for table in selected_tables:
         raw_ddl = db_manager.get_table_ddl(table)
         tbl_data = next((t for t in full_schema_list if t.get("table_name", t.get("table")) == table), None)
@@ -106,7 +95,9 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
             colonne_pulite = set(tbl_data.get("columns", []))
             
             clean_ddl = prune_ddl_ast(raw_ddl, colonne_pulite)
-            critic_ddl_context += f"-- Schema for {table}:\n{clean_ddl}\n\n"
+            meta_comment = format_table_metadata_as_sql_comment(tbl_data, colonne_pulite)
+            
+            critic_ddl_context += f"-- Schema for {table}:\n{clean_ddl}\n{meta_comment}\n\n"
         else:
             critic_ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
     
@@ -120,7 +111,6 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         selected_tables=", ".join(selected_tables),
         extracted_info=extracted_info,
         schema_ddl=critic_ddl_context,
-        markdown_context=critic_markdown_context,
         wrong_sql=wrong_sql,
         error_traceback=error_traceback
     )
