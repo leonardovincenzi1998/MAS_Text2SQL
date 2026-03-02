@@ -4,7 +4,6 @@ import os
 import sys
 import warnings
 import traceback
-
 from langchain_core.messages import HumanMessage
 from src.config import DEFAULT_DB_PATH
 

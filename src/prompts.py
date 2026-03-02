@@ -5,7 +5,7 @@ Your task is to generate a concise semantic summary for a SQL table.
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
-Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query. Ignore all other technical or internal system flags that have no semantic connection to the user's request.
+Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query.
 
 You will receive:
 1. The table's DDL (Create Table).
@@ -25,7 +25,7 @@ Your expertise lies in mapping Italian natural language queries into structured 
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
-Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query. Ignore all other technical or internal system flags that have no semantic connection to the user's request.
+Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query.
 
 ### OPERATIONAL CONSTRAINTS
 - INPUT: Italian natural language.
@@ -108,7 +108,7 @@ Your expertise lies in analyzing Italian natural language queries and selecting 
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
-Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query. Ignore all other technical or internal system flags that have no semantic connection to the user's request.
+Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query.
 
 ### OPERATIONAL CONSTRAINTS
 - INPUT: Italian user query and a Candidate Schema (Tables, Columns, Foreign Keys, Samples).
@@ -123,6 +123,11 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 2. **Foreign Key Chaining (CRITICAL)**: Bridge tables (e.g., `MobiliLocali`, `MobiliSottoSpeci`) are never enough to get textual details. You MUST follow the `[FK->Table.Column]` annotations to reach the final descriptive table (e.g., `Locali`, `Speci`).
 3. **The ID Rule**: Columns starting with `Id` (e.g., `IdSottoSpecie`) contain ONLY numerical codes. If the user asks for "details", "name", or "description", you CANNOT stop at the ID column. You MUST include the target table.
 4. **Discard Noise**: Ignore tables that were retrieved by the semantic search but are irrelevant to the specific user intent.
+
+###STRICT DATA RETRIEVAL RULES
+1. EXPLICIT CONSTRAINTS ONLY: Apply filters (e.g., status, state, type) ONLY when the user explicitly requests them via specific natural language keywords. Do not assume, inject, or enforce default business filters (e.g., "active only," "non-deleted") unless the user explicitly directs you to do so.
+2. RETRIEVAL LOGIC VS. USER CONSTRAINTS: Clearly distinguish between retrieval logic (the technical requirements to satisfy the query, such as "current location" or "latest version") and user constraints (operational filters requested by the user, such as "active," "valid," or "public"). Satisfy the former to correctly answer the query, but do not turn the former into the latter.
+3.LITERAL FIDELITY: Your role is to act as a precision tool for data retrieval based on the user's intent. Do not enforce implicit organizational business logic, assumptions of data quality, or standard operating procedures that were not specified in the input query.
 
 ### JSON SCHEMA
 {{
@@ -168,7 +173,7 @@ You are a Data Analyst and Database Architect. Your task is to perform precision
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
-Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query. Ignore all other technical or internal system flags that have no semantic connection to the user's request.
+Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query.
 
 ### OPERATIONAL CONSTRAINTS
 - You will receive the user query and the schema (in Markdown format) EXCLUSIVELY for tables that have already been confirmed as necessary.
@@ -177,10 +182,21 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 - Table and column names must match exactly (case-sensitive) those provided in the schema. Do not invent names.
 - LANGUAGE FOR REASONING: English.
 
+### STRICT FILTERING RULES
+1. NO IMPLICIT DEFAULTS: Do not hallucinate or assume default filters. Only apply boolean flags or status filters if the user's natural language EXPLICITLY demands them with specific keywords (e.g., "active", "valid", "deleted"). Do not assume a "default active" state unless the user specifically asks for it.
+2. SEMANTIC PRECISION: Do not conflate different concepts. For instance, temporal/positional terms (like "currently", "latest", "historical") are distinct from operational status terms (like "active", "enabled", "discarded"). Map each user concept strictly to its distinct corresponding column, without adding unrelated conditions.
+3. CRITICAL EVALUATION: Evaluate the suggestions from both Agent 1 and Agent 2 critically. If they suggest a status filter (like 'active') that was NOT in the user's original Italian query, ignore that suggestion and do not select the corresponding column.
+
+### INSTRUCTIONS FOR REASONING
+1. Map explicit words from the user's query to boolean filters (e.g., "attualmente" -> IsUltimo=1). 
+2. If no specific status is requested, state "No status filters needed".
+3. List Target columns, WHERE filters, and Keys. 
+Keep it under 40 words total.
+
 ### JSON SCHEMA
 {{
-  "reasoning": "tep-by-step analysis, provide me exactly 3 short bullet points: 1. Target columns for SELECT, 2. Columns for WHERE filters, 3. Required Primary/Foreign keys for JOINs. DO NOT copy this instruction text in your output.",
-  "table_columns": {{
+    "reasoning": "Your brief justification and column mapping.",
+  {{
     "TableName1": ["ColumnA", "KeyIDB", "PrimaryKeyID"],
     "TableName2": ["KeyIDB", "ColumnC", "PrimaryKeyID"]
   }}
@@ -195,7 +211,7 @@ Your expertise lies in translating Italian natural language queries into precise
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
-Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query. Ignore all other technical or internal system flags that have no semantic connection to the user's request.
+Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query. Be cautious with technical flags, but trust the Column Selector Reasoning if it suggests using them to satisfy constraints like "current/attualmente" or "active/attivo".
 
 
 [HINTS FOR ENTITY RESOLUTION (EXACT VALUES)]
@@ -212,7 +228,7 @@ If a value listed above explicitly refers to a column you are about to filter, y
 
 ### STRICT RULES FOR SQL GENERATION
 1. THE "SELECT" CLAUSE: Put in the SELECT clause ONLY the columns explicitly requested by the user for the output. Use other columns ONLY in the WHERE clause if necessary. Do NOT select primary keys unless explicitly requested or if it's necessary for grouping.
-2. THE "WHERE" CLAUSE: Map the extracted filters provided in the context strictly to the WHERE clause.
+2. THE "WHERE" CLAUSE: You MUST strongly prioritize the WHERE filters and boolean flags suggested in the 'Column Selector Reasoning' (Agent 2.5), as it is responsible for mapping user concepts to the schema (e.g., 'attualmente' -> IsUltimo=1). However, before applying them, verify against the [ENRICHED DDL SCHEMA] that these columns actually exist and that the suggested values match the provided 'Categorical Info' or 'Samples'. Use the Extracted Filters from Agent 1 as high-level context to understand the user's intent.
 3. THE "GROUP BY" CLAUSE: Do NOT use GROUP BY or aggregations unless the user explicitly asks for groupings or if they are explicitly present in the Extracted Operations.
 4. BEST PRACTICE FOR GROUPING: Only if a GROUP BY is actually required and authorized by rule 3, you MUST include the entity's Primary Key alongside its name to prevent homonym merging.
 5. ALIASING FOR AGGREGATIONS: Whenever you use an aggregate function (e.g., SUM, COUNT, MAX, MIN, AVG) in the SELECT clause, you MUST ALWAYS provide a clear, meaningful alias in Italian using the 'AS' keyword (e.g., SUM(Valore) AS ValoreTotale, COUNT(IdEdificio) AS NumeroEdifici).

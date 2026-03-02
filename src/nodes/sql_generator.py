@@ -2,7 +2,7 @@ from typing import Dict, Any
 from langchain_core.prompts import ChatPromptTemplate
 from src.models import AgentState
 from src.database import DatabaseManager
-from src.utils import validate_ast_and_format, prune_ddl_ast, format_schema_for_llm, format_table_metadata_as_sql_comment
+from src.utils import validate_ast_and_format, prune_ddl_ast, format_table_metadata_as_sql_comment
 from src.config import llm_sql
 from src.prompts import SQL_GENERATOR_SYSTEM_PROMPT
 
