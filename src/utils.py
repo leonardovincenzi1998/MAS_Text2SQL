@@ -366,42 +366,40 @@ def get_schema_with_formatted_columns(schema_list: List[Dict[str, Any]]) -> List
 
 def format_table_metadata_as_sql_comment(tbl_data: dict, allowed_cols: set) -> str:
     """
-    Converte i metadati di una tabella (descrizioni, valori unici/sample) 
-    in un blocco di commenti SQL, includendo solo le colonne permesse.
+    Converts the metadata of a table (categorical and sample values) 
+    into a block of SQL comments, extracting them from the correct JSON keys.
     """
     if not tbl_data:
         return ""
 
     table_name = tbl_data.get("table_name", tbl_data.get("table", "Unknown"))
     
-    # Inizializza il blocco di commenti
+    # make the permitted columns case-insensitive for more secure matching
+    allowed_lower = {c.lower() for c in allowed_cols}
+    
     comments = [f"/* METADATA AND COLUMN PROFILES FOR TABLE '{table_name}':"]
-    
-    # Adatta questo ciclo in base alla struttura esatta del tuo tbl_data 
-    # (assumo che ci sia una lista di dict o un dict di dict per le colonne)
-    columns_info = tbl_data.get("column_metadata", []) 
-    
-    # Se il tuo JSON salva i metadati diversamente, adatta le chiavi qui sotto:
     has_metadata = False
-    for col_info in columns_info:
-        col_name = col_info.get("name", "")
-        
-        # Salta le colonne scartate dal Column Selector
-        if col_name not in allowed_cols:
-            continue
-            
-        meta_parts = []
-        if col_info.get("description"):
-            meta_parts.append(f"Description: {col_info['description']}")
-        if col_info.get("distinct_values"):
-            meta_parts.append(f"Categorical Values: {col_info['distinct_values']}")
-        elif col_info.get("sample_values"):
-            meta_parts.append(f"Samples: {col_info['sample_values']}")
-            
-        if meta_parts:
+    
+    # 1. Retrieve Samples (your “column_samples” field, which is a dict)
+    samples = tbl_data.get("column_samples", {})
+    if samples:
+        for col_name, sample_list in samples.items():
+            if col_name.lower() in allowed_lower:
+                safe_samples = [str(s).replace('\n', ' ').replace('\r', '') for s in sample_list]
+                if safe_samples:
+                    comments.append(f" - {col_name} (Samples): [{', '.join(safe_samples)}]")
+                    has_metadata = True
+
+    # 2. Recover Categorical Values (your “categorical_values” field, which is a multi-line string)
+    cat_vals = tbl_data.get("categorical_values", "")
+    if cat_vals and cat_vals.strip():
+        valid_cat_lines = [line for line in cat_vals.split('\n') if any(c.lower() in line.lower() for c in allowed_lower)]
+        if valid_cat_lines:
+            comments.append(" - Categorical Info:")
+            for line in valid_cat_lines:
+                comments.append(f"   {line}")
             has_metadata = True
-            comments.append(f" - {col_name}: {' | '.join(meta_parts)}")
-            
+
     comments.append("*/")
     
     return "\n".join(comments) if has_metadata else ""

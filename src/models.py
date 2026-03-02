@@ -47,6 +47,7 @@ class AgentState(TypedDict):
     error_traceback: Optional[str] = None       # Caught SQL exception or ‘empty result’ flag
     retry_count: int                            # Counter to prevent infinite loops
     data_sample: Optional[List[Dict[str, Any]]] = None # Extracted data sample (if successful)
+    entity_hints: str
 
 class CriticResult(BaseModel):
     correction_plan: str = Field(description="Step-by-step reasoning that identifies the error category (from the taxonomy) and briefly explains how to correct it.")

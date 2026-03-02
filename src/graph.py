@@ -7,6 +7,7 @@ from src.nodes.table_selector import run_table_selector
 from src.nodes.column_selector import run_column_selector
 from src.nodes.sql_generator import run_sql_generator
 from src.nodes.sandbox_critic import run_execution_sandbox, run_query_critic
+from src.nodes.value_linker import run_value_linker
 
 
 # conditional routing function
@@ -33,6 +34,7 @@ def create_workflow() -> StateGraph:
 
     # add the agents as nodes
     workflow.add_node("entity_extractor", run_entity_extractor)
+    workflow.add_node("value_linker", run_value_linker)
     workflow.add_node("table_selector", run_table_selector)
     workflow.add_node("column_selector", run_column_selector)
     workflow.add_node("sql_generator", run_sql_generator)
@@ -42,7 +44,8 @@ def create_workflow() -> StateGraph:
 
     # define the initial execution flow
     workflow.set_entry_point("entity_extractor")
-    workflow.add_edge("entity_extractor", "table_selector")
+    workflow.add_edge("entity_extractor", "value_linker")
+    workflow.add_edge("value_linker", "table_selector")
     workflow.add_edge("table_selector", "column_selector")
     workflow.add_edge("column_selector", "sql_generator")
     workflow.add_edge("sql_generator", "execution_sandbox")

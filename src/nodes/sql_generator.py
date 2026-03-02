@@ -64,7 +64,6 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
     # format analytical context from agent 1
     extraction = state.get("extraction_result")
     extracted_info = "None"
-    entity_hints = "Nessun hint disponibile sui valori testuali."
 
     if extraction:
         extracted_info = (
@@ -74,10 +73,7 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
             f"Filters: {extraction.filters}"
         )
 
-        if extraction.entities:
-            print("   🔍 (Value Linking) Risoluzione semantica delle entità a testo libero...")
-            from src.tools import resolve_entities_in_db
-            entity_hints = resolve_entities_in_db(extraction.entities)
+    entity_hints = state.get("entity_hints", "Nessun hint disponibile sui valori testuali.")
 
     # retrieve graph/table selector reasoning from agent 2 to guide joins
     messages = state.get("messages", [])
