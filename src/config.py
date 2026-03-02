@@ -13,8 +13,8 @@ API_KEY = os.getenv("API_KEY", 'EMPTY')
 
 # Vector Store Configuration
 COLLECTION_NAME = "langchain"
-BM25_PATH = os.getenv("BM25_PATH", os.path.join(BASE_DIR, "bm25_index.pkl"))
 VALUE_COLLECTION_NAME = "db_values"
+BM25_PATH = os.getenv("BM25_PATH", os.path.join(BASE_DIR, "bm25_index.pkl"))
 
 # Embeddings Configuration
 DEFAULT_LOCAL_MODEL_PATH = "/scratch.hpc/leonardo.vincenzi/mas_text2sql/local_models/bge-m3"

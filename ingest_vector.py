@@ -7,6 +7,7 @@ import asyncio
 import os
 from typing import List, Dict, Any, Tuple, Set
 import chromadb
+import hashlib
 
 from langchain_core.documents import Document
 from langchain_community.retrievers import BM25Retriever
@@ -20,7 +21,7 @@ from src.database import DatabaseManager
 from src.utils import get_canonical_name
 
 from src.config import (
-    DEFAULT_DB_PATH, CHROMA_PATH, COLLECTION_NAME, 
+    DEFAULT_DB_PATH, CHROMA_PATH, COLLECTION_NAME, VALUE_COLLECTION_NAME,
     LLM_MODEL_NAME, BASE_URL, API_KEY
 )
 from src.prompts import DESCRIPTION_AGENT_PROMPT
@@ -223,6 +224,7 @@ async def process_single_table(
     db_path: str, 
     table_name: str, 
     collection: Any, 
+    value_collection: Any,
     agent: Agent, 
     semaphore: asyncio.Semaphore
 ) -> bool:
@@ -308,6 +310,53 @@ async def process_single_table(
                 ids=[canonical_name]
             )
 
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                
+                # take the column types to understand which ones are free text
+                cursor.execute(f"PRAGMA table_info({real_table_name})")
+                cols_info = cursor.fetchall()
+                # filter only text/char columns that have been deemed significant
+                text_cols = [c[1] for c in cols_info if c[1] in significant_cols and ("CHAR" in c[2].upper() or "TEXT" in c[2].upper())]
+                
+                val_docs = []
+                val_metadatas = []
+                val_ids = []
+                
+                for col in text_cols:
+                    safe_col = f'"{col}"'
+                    safe_table = f'"{real_table_name}"'
+                    
+                    cursor.execute(f"SELECT DISTINCT {safe_col} FROM {safe_table} WHERE {safe_col} IS NOT NULL")
+                    rows = cursor.fetchall()
+                    
+                    for r in rows:
+                        val = str(r[0]).strip()
+                        
+                        if len(val) >= 3:
+                            val_docs.append(val)
+                            val_metadatas.append({"table_name": real_table_name, "column_name": col})
+                            
+                            md5_hash = hashlib.md5(val.encode('utf-8')).hexdigest()
+                            val_ids.append(f"{real_table_name}_{col}_{md5_hash}")
+                
+                conn.close()
+                
+                # block upsert to comply with ChromaDB limits
+                if val_docs:
+                    batch_size = 1000
+                    for i in range(0, len(val_docs), batch_size):
+                        value_collection.upsert(
+                            documents=val_docs[i:i+batch_size],
+                            metadatas=val_metadatas[i:i+batch_size],
+                            ids=val_ids[i:i+batch_size]
+                        )
+                    print(f"   🔤 Inseriti {len(val_docs)} valori testuali per '{table_name}'.")
+                    
+            except Exception as e:
+                print(f"   ⚠️ Errore nell'estrazione dei valori per '{table_name}': {e}")
+
             print(f"   ✅ Tabella '{table_name}' completata.")
         return True
 
@@ -358,6 +407,14 @@ async def main():
         name=COLLECTION_NAME, embedding_function=emb_fn
     )
 
+    try:
+        chroma_client.delete_collection(VALUE_COLLECTION_NAME)
+    except Exception:
+        pass
+    value_collection = chroma_client.get_or_create_collection(
+        name=VALUE_COLLECTION_NAME, embedding_function=emb_fn
+    )
+    
     agent = Agent(model=get_model(), system_prompt=DESCRIPTION_AGENT_PROMPT)
 
     # discovery and execution
@@ -368,7 +425,7 @@ async def main():
     semaphore = asyncio.Semaphore(max(1, max_conc))
 
     tasks = [
-        process_single_table(db_manager, args.db_path, table, collection, agent, semaphore)
+        process_single_table(db_manager, args.db_path, table, collection, value_collection, agent, semaphore)
         for table in tables
     ]
     

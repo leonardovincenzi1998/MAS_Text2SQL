@@ -12,7 +12,7 @@ from langchain_community.retrievers import BM25Retriever
 from src.models import SearchSchemaInput
 from src.embedding_factory import get_shared_embedding_function
 from src.utils import get_canonical_name
-from src.config import CHROMA_PATH, COLLECTION_NAME, BM25_PATH
+from src.config import CHROMA_PATH, COLLECTION_NAME, BM25_PATH, VALUE_COLLECTION_NAME
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -157,3 +157,34 @@ def search_schema_tool(query: str, k: int = 6) -> str: #mettere k = 7 con Llama 
     except Exception as e:
         print(f"❌ CRITICAL ERROR IN TOOL: {e}")
         return empty_json
+    
+def resolve_entities_in_db(entities: List[str], k: int = 3) -> str:
+    """Looks for text entities in the Vector DB of values and returns exact matches."""
+    if not entities:
+        return "Nessuna entità testuale trovata."
+        
+    try:
+        vectorstore = Chroma(
+            persist_directory=CHROMA_PATH, 
+            embedding_function=EMBEDDING_FUNCTION, 
+            collection_name=VALUE_COLLECTION_NAME
+        )
+        
+        resolution_hints = []
+        for entity in entities:
+            # skip words that are too generic or short
+            if len(entity.strip()) < 3:
+                continue
+                
+            results = vectorstore.similarity_search(entity, k=k)
+            if results:
+                matches = [f"'{res.page_content}' (da {res.metadata.get('table_name')}.{res.metadata.get('column_name')})" for res in results]
+                resolution_hints.append(f"- Se l'utente cerca '{entity}', usa ESATTAMENTE questi valori reali estratti dal DB: {', '.join(matches)}")
+        
+        if resolution_hints:
+            return "\n".join(resolution_hints)
+            
+        return "Nessun match semantico esatto trovato per i valori testuali nel DB."
+    except Exception as e:
+        print(f"⚠️ Errore durante il Value Linking semantico: {e}")
+        return "Impossibile recuperare i valori testuali."
