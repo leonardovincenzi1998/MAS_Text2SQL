@@ -3,6 +3,7 @@ import os
 import json
 import sqlglot
 from sqlglot import exp, errors
+from sqlglot.expressions import Subquery
 from typing import Any, Tuple, List, Optional, Dict
 from xml.parsers.expat import errors
 from cv2 import exp
@@ -150,6 +151,46 @@ def expand_selection_with_graph(
     
     return final_real_names
 
+# transforms the json schema into an optimized pseudo-markdown format for the llm
+def format_schema_for_llm(schema_list: list, selected_columns: Optional[Dict[str, List[str]]] = None) -> str:
+    """
+    Generate the Markdown by reading the pre-calculated strings, applying only the column filter.
+    """
+    formatted_tables = []
+    
+    for tbl in schema_list:
+        name = tbl.get("table_name") or tbl.get("table", "Unknown")
+        desc = tbl.get("description", tbl.get("desc", ""))
+        cat_vals = tbl.get("categorical_values", "")
+        
+        # retrieve the pre-calculated cache and raw columns
+        formatted_cols_dict = tbl.get("formatted_columns_dict", {})
+        raw_columns = tbl.get("columns", [])
+        
+        # FUNNEL STEP: Column filter
+        cols_to_keep = []
+        if selected_columns and name in selected_columns:
+            sc_upper = [c.upper() for c in selected_columns[name]]
+            cols_to_keep = [c for c in raw_columns if c.upper() in sc_upper or c.upper().startswith("ID")]
+        else:
+            cols_to_keep = raw_columns
+
+        # directly retrieve the string enriched by the dictionary
+        col_tuples = [formatted_cols_dict.get(col, col) for col in cols_to_keep]
+            
+        # pseudo-markdown construction
+        tbl_md = f"### Tabella: {name}\n"
+        
+        if desc and desc.strip() and desc != "Unknown": 
+            tbl_md += f"Descrizione: {desc}\n"
+            
+        tbl_md += f"Colonne: ( {', '.join(col_tuples)} )\n"
+        if cat_vals: 
+            tbl_md += f"Valori Notevoli:\n{cat_vals}\n"
+            
+        formatted_tables.append(tbl_md)
+        
+    return "\n\n".join(formatted_tables)
 
 def validate_ast_and_format(
     raw_sql: str, 
@@ -166,6 +207,9 @@ def validate_ast_and_format(
         # extract the names of the CTEs (es. WITH TabellaTemp AS ...)
         valid_ctes = {cte.alias.lower() for cte in parsed_ast.find_all(exp.CTE) if cte.alias}
         
+        #extract the aliases defined for subqueries (es. FROM (SELECT ... ) AS Subq)
+        valid_subqueries = {subq.alias.lower() for subq in parsed_ast.find_all(exp.Subquery) if subq.alias}
+
         # extract the aliases defined in the SELECT statements (e.g. SUM(Value) AS TotalValue)
         valid_aliases = {alias.alias.lower() for alias in parsed_ast.find_all(exp.Alias) if alias.alias}
 
@@ -177,7 +221,7 @@ def validate_ast_and_format(
             real_name = table.name.lower()
             
             # CTE safeguard, ignore the temporary tables defined in the query
-            if real_name in valid_ctes:
+            if real_name in valid_ctes or real_name in valid_subqueries:
                 continue
                 
             used_tables.append(real_name)

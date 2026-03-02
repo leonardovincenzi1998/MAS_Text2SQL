@@ -1,6 +1,12 @@
 from langgraph.graph import StateGraph, END
-from src.agent import run_entity_extractor, run_table_selector, run_column_selector, run_sql_generator, run_execution_sandbox, run_query_critic
 from src.models import AgentState
+
+from src.nodes.extractor import run_entity_extractor
+from src.nodes.extractor import run_entity_extractor
+from src.nodes.table_selector import run_table_selector
+from src.nodes.sql_generator import run_sql_generator
+from src.nodes.sandbox_critic import run_execution_sandbox, run_query_critic
+
 
 # conditional routing function
 def routing_decision(state: AgentState) -> str:
