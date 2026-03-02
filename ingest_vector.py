@@ -219,6 +219,20 @@ def get_foreign_keys_robust(db_path: str, table_name: str) -> List[Dict[str, str
         })
     return results
 
+def get_global_pks(db_path: str, tables: List[str]) -> Dict[str, str]:
+    """Scansiona tutte le tabelle e mappa NomeColonnaPK -> NomeTabella"""
+    global_pks = {}
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    for t in tables:
+        safe_table = t.replace('"', '""')
+        cursor.execute(f'PRAGMA table_info("{safe_table}")')
+        for row in cursor.fetchall():
+            if row[5] > 0:  # row[5] è il flag 'pk'
+                global_pks[row[1]] = t  # row[1] è il nome della colonna
+    conn.close()
+    return global_pks
+
 
 async def process_single_table(
     db_manager: Any, 
@@ -227,7 +241,8 @@ async def process_single_table(
     collection: Any, 
     value_collection: Any,
     agent: Agent, 
-    semaphore: asyncio.Semaphore
+    semaphore: asyncio.Semaphore,
+    global_pks: Dict[str, str]
 ) -> bool:
     # processes a single table pipeline: DDL Extraction -> Smart Profiling -> LLM Description -> ChromaDB Upsert
     print(f"   ⏳ Analisi tabella: {table_name}...")
@@ -253,6 +268,29 @@ async def process_single_table(
                         "to_column": "id"
                     })
                     existing_targets.add(ref)
+
+            # --- PHASE A.2: HEURISTIC FK INFERENCE (Basato sul Naming) ---
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute(f'PRAGMA table_info("{real_table_name}")')
+            cols_info = cursor.fetchall()
+            conn.close()
+
+            for col in cols_info:
+                col_name = col[1]
+                is_pk = col[5] > 0
+                if not is_pk and col_name in global_pks:
+                    target_table = global_pks[col_name]
+                    target_canon = get_canonical_name(target_table)
+                    
+                    if target_canon not in existing_targets:
+                        foreign_keys.append({
+                            "to_table_canonical": target_canon,
+                            "to_table_real": target_table,
+                            "from_column": col_name,
+                            "to_column": col_name
+                        })
+                        existing_targets.add(target_canon)
 
             # --- PHASE B: SMART DATA PROFILING AND FALLBACK COLUMNS ---
             stats_text, significant_cols, column_samples = await asyncio.to_thread(
@@ -365,7 +403,6 @@ async def process_single_table(
         print(f"   ❌ ERRORE su tabella '{table_name}': {e}")
     return False
 
-
 def get_model():
     # configures the model by setting environment variables
     # this method is safe because it bypasses syntax differences between library versions
@@ -422,11 +459,13 @@ async def main():
     tables = db_manager.search_tables(None)
     print(f"🚀 Trovate {len(tables)} tabelle. Inizio arricchimento parallelo...")
 
+    global_pks = get_global_pks(args.db_path, tables)
+
     max_conc = int(os.getenv("INGEST_MAX_CONCURRENCY", "4"))
     semaphore = asyncio.Semaphore(max(1, max_conc))
 
     tasks = [
-        process_single_table(db_manager, args.db_path, table, collection, value_collection, agent, semaphore)
+        process_single_table(db_manager, args.db_path, table, collection, value_collection, agent, semaphore, global_pks)
         for table in tables
     ]
     
