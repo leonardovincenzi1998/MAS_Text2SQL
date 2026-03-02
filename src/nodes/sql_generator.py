@@ -82,9 +82,17 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
 
     # retrieve graph/table selector reasoning from agent 2 to guide joins
     messages = state.get("messages", [])
-    last_reasoning = "None"
-    if messages:
-        last_reasoning = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
+    agent2_reasoning = "Nessun ragionamento Tabelle."
+    agent25_reasoning = "Nessun ragionamento Colonne."
+
+    for msg in messages:
+        content = msg.content if hasattr(msg, 'content') else str(msg)
+        if "Tabelle Selezionate:" in content:
+            agent2_reasoning = content
+        elif "Colonne Selezionate:" in content:
+            agent25_reasoning = content
+            
+    combined_reasoning = f"--- RAGIONAMENTO JOIN (Agente 2) ---\n{agent2_reasoning}\n\n--- RAGIONAMENTO COLONNE E FILTRI (Agente 2.5) ---\n{agent25_reasoning}"
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", SQL_GENERATOR_SYSTEM_PROMPT),
@@ -98,7 +106,7 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
             "ddl_context": ddl_context,
             "markdown_context": markdown_context,
             "extracted_info": extracted_info,
-            "reasoning": last_reasoning,
+            "reasoning": combined_reasoning,
             "entity_hints": entity_hints,
             "query": state["user_query"]
         })

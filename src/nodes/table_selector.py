@@ -56,10 +56,14 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     
     # llm selection
     print("🧠 (Table Selector) Filtering intelligente...")
+
+    ext_context = "Nessuna estrazione fornita."
+    if extraction:
+        ext_context = f"- Intento: {getattr(extraction, 'intent', '')}\n- Entità: {getattr(extraction, 'entities', [])}\n- Filtri: {getattr(extraction, 'filters', [])}"
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", TABLE_SELECTOR_SYSTEM_PROMPT),
-        ("human", "### EXECUTION\nQUERY: {query}\nSCHEMA:\n{schema}\n\nOutput:")
+        ("human", "### CONTESTO ESTRATTO (AGENTE 1)\n{ext_context}\n\n### EXECUTION\nQUERY: {query}\nSCHEMA:\n{schema}\n\nOutput:")
     ])
     
     structured_llm = llm_reasoning.with_structured_output(TableSelectionResult).with_retry(stop_after_attempt=3)
@@ -68,7 +72,8 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     try:
         result: TableSelectionResult = await chain.ainvoke({
             "schema": schema_markdown,
-            "query": state["user_query"]
+            "query": state["user_query"],
+            "ext_context": ext_context
         })
         
         # 1. base llm selection

@@ -5,8 +5,6 @@ import sqlglot
 from sqlglot import exp, errors
 from sqlglot.expressions import Subquery
 from typing import Any, Tuple, List, Optional, Dict
-from xml.parsers.expat import errors
-from cv2 import exp
 import networkx as nx
 
 # cleans and standardizes table or column names to a canonical format

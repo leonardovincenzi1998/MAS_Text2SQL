@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 from dataclasses import dataclass
 from langgraph.graph.message import add_messages
 
+warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
+
 # Structured output for the entity extraction agent
 class ExtractionResult(BaseModel):
     reasoning: str = Field(..., description="Step-by-step logic in English including why specific SQL operators were chosen.")

@@ -26,7 +26,8 @@ async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
         
         # semantic inspection: enforce a LIMIT 10 if not present to avoid huge payloads
         # and to quickly check if the query returns empty data.
-        check_query = query
+        check_query = query.strip().rstrip(";")
+        
         if "LIMIT" not in check_query.upper():
             check_query += "\nLIMIT 10"
             
@@ -109,10 +110,15 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         else:
             critic_ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
     
+    # recupero extraction
+    extraction = state.get("extraction_result")
+    extracted_info = f"Entità: {getattr(extraction, 'entities', [])} | Filtri: {getattr(extraction, 'filters', [])}" if extraction else "Nessuna estrazione."
+
     # 3. prompt formatting
     prompt = QUERY_CRITIC_PROMPT.format(
         user_query=user_query,
         selected_tables=", ".join(selected_tables),
+        extracted_info=extracted_info,
         schema_ddl=critic_ddl_context,
         markdown_context=critic_markdown_context,
         wrong_sql=wrong_sql,

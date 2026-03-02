@@ -95,7 +95,8 @@ def analyze_columns_smart(
             safe_col = f'"{col_name}"'
             
             is_structural = col_name in structural_cols
-            
+            is_boolean = col_name.startswith("Is") or col_name.startswith("is") or "BIT" in col_type or "BOOL" in col_type
+
             # formulate query based on numeric vs text types
             if any(x in col_type for x in ['INT', 'REAL', 'NUM', 'DEC', 'FLOAT', 'DOUBLE']):
                 empty_condition = f"{safe_col} IS NULL OR {safe_col} = 0"
@@ -123,7 +124,7 @@ def analyze_columns_smart(
             keep = False
             if total == 0:
                 keep = False
-            elif is_structural:
+            elif is_structural or is_boolean:
                 keep = True
             elif sparsity >= threshold_sparsity:
                 keep = False

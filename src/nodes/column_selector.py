@@ -12,7 +12,6 @@ async def run_column_selector(state: AgentState) -> Dict[str, Any]:
     selected_tables = state.get("selected_tables", [])
     if not selected_tables:
         return {"error": "Nessuna tabella passata al Column Selector."}
-
     
     # restrict the JSON to only the selected tables
     full_schema_list = state.get("parsed_schema", [])
@@ -26,10 +25,43 @@ async def run_column_selector(state: AgentState) -> Dict[str, Any]:
     ]
     markdown_context = format_schema_for_llm(selected_schema_list)
 
+# load context from previous agent for better reasoning
+    extraction = state.get("extraction_result")
+    agent1_context = "Nessun dato estratto dall'Agente 1."
+    if extraction:
+        agent1_context = (
+            f"- Intento: {getattr(extraction, 'intent', 'N/A')}\n"
+            f"- Entità: {getattr(extraction, 'entities', [])}\n"
+            f"- Operazioni: {getattr(extraction, 'operations', [])}\n"
+            f"- Filtri: {getattr(extraction, 'filters', [])}"
+        )
+
+    # --- RECUPERO CONTESTO AGENTE 2 ---
+    agent2_reasoning = "Ragionamento non disponibile."
+    messages = state.get("messages", [])
+    for msg in messages:
+        content = msg.content if hasattr(msg, 'content') else str(msg)
+        if "✅ Tabelle Selezionate:" in content and "🤔 Ragionamento:" in content:
+            # Estraiamo solo la parte di ragionamento pulita
+            agent2_reasoning = content.split("🤔 Ragionamento:")[-1].strip()
+            break
+
+    # --- COSTRUZIONE DEL PROMPT HUMAN ARRICCHITO ---
+    human_message_content = f"""DOMANDA UTENTE ORIGINALE: {state['user_query']}
+    [CONTEXT AGENT 1 - SEMANTIC EXTRACTION]
+    {agent1_context}
+
+    [CONTEXT AGENT 2 - TABLE SELECTION]
+    Reasoning behind the choice of tables: {agent2_reasoning}
+
+    [SCHEMA OF SELECTED TABLES]
+    {markdown_context}
+
+    Output:"""
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", COLUMN_SELECTOR_SYSTEM_PROMPT),
-        ("human", "DOMANDA UTENTE: {query}\n\nSCHEMA TABELLE SELEZIONATE:\n{schema}\n\nOutput:")
+        ("human", "{formatted_input}")
     ])
     
     structured_llm = llm_reasoning.with_structured_output(ColumnSelectionResult).with_retry(stop_after_attempt=3)
@@ -37,8 +69,7 @@ async def run_column_selector(state: AgentState) -> Dict[str, Any]:
     
     try:
         result: ColumnSelectionResult = await chain.ainvoke({
-            "query": state["user_query"],
-            "schema": markdown_context
+            "formatted_input": human_message_content
         })
         
         print(f"   -> 🧠 Ragionamento: {result.reasoning}")

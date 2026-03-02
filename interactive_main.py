@@ -94,8 +94,8 @@ async def main():
 
                 # vector db stats
                 print("\n📚 [Vector DB] Schema Recuperato:")
-                if final_state.get("candidate_tables_schema"):
-                    schema_len = len(final_state['candidate_tables_schema'])
+                if final_state.get("parsed_schema"):
+                    schema_len = len(final_state['parsed_schema'])
                     print(f"   (JSON Schema trovato, lunghezza: {schema_len} caratteri)")
                 else:
                     print("   Nessuno schema trovato.")
@@ -104,13 +104,20 @@ async def main():
                 print("\n🎯 [Agente 2] TABELLE SELEZIONATE:")
                 print(final_state.get("selected_tables", "Nessuna tabella selezionata"))
                 
+                #agent 2.5: column selection result
+                if final_state.get("selected_columns"):
+                    print("\n🎯 [Agente 2.5] COLONNE SELEZIONATE (Schema Linking):")
+                    for table, cols in final_state["selected_columns"].items():
+                        print(f"   {table}: {cols}")
+
                 # final reasoning log
                 messages = final_state.get("messages", [])
-
-                if len(messages) >= 2:
-                    msg_agente_2 = messages[-2]
-                    content_agente_2 = msg_agente_2.content if hasattr(msg_agente_2, 'content') else str(msg_agente_2)
-                    print(f"\n🧠 [Ragionamento Agente 2 - Table Selector]:\n{content_agente_2}")
+                for msg in messages:
+                    content = msg.content if hasattr(msg, 'content') else str(msg)
+                    if "✅ Tabelle Selezionate:" in content:
+                        print(f"\n🧠 [Ragionamento Agente 2 - Table Selector]:\n{content}")
+                    elif "✅ Colonne Selezionate:" in content:
+                        print(f"\n🧠 [Ragionamento Agente 2.5 - Column Selector]:\n{content}")
 
                 # agent 3: sql generation
                 if final_state.get("generated_sql"):

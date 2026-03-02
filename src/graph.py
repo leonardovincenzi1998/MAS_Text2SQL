@@ -4,6 +4,7 @@ from src.models import AgentState
 from src.nodes.extractor import run_entity_extractor
 from src.nodes.extractor import run_entity_extractor
 from src.nodes.table_selector import run_table_selector
+from src.nodes.column_selector import run_column_selector
 from src.nodes.sql_generator import run_sql_generator
 from src.nodes.sandbox_critic import run_execution_sandbox, run_query_critic
 

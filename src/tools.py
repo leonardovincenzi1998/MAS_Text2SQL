@@ -14,6 +14,8 @@ from src.embedding_factory import get_shared_embedding_function
 from src.utils import get_canonical_name
 from src.config import CHROMA_PATH, COLLECTION_NAME, BM25_PATH, VALUE_COLLECTION_NAME
 
+warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
+
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"🔌 Loading Embeddings on: {DEVICE}")

@@ -166,6 +166,10 @@ COLUMN_SELECTOR_SYSTEM_PROMPT = """
 ### ROLE
 You are a Data Analyst and Database Architect. Your task is to perform precision ‘Schema Linking’: analyse a user query in Italian and select EXACTLY which columns from the tables provided are needed to generate the SQL query.
 
+[DOMAIN KNOWLEDGE]
+The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
+Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query (e.g., terms like 'current', 'active', 'latest', 'deleted'). Ignore all other technical or internal system flags that have no semantic connection to the user's request."
+
 ### OPERATIONAL CONSTRAINTS
 - You will receive the user query and the schema (in Markdown format) EXCLUSIVELY for tables that have already been confirmed as necessary.
 - You must select the columns necessary for: SELECT, WHERE conditions, and groupings/sorting (GROUP BY, ORDER BY).
@@ -175,11 +179,11 @@ You are a Data Analyst and Database Architect. Your task is to perform precision
 
 ### JSON SCHEMA
 {{
-  "reasoning": "Step-by-step logic in English. Brief explanation of which columns are needed for filtering, selection, and which keys are needed for JOINs.",
-  "table_columns": {
+  "reasoning": "Brief explanation in english, step-by-step, of which columns are needed for filtering, selection, and which keys are needed for JOINs.",
+  "table_columns": {{
     "TableName1": ["ColumnA", "KeyIDB", "PrimaryKeyID"],
     "TableName2": ["KeyIDB", "ColumnC", "PrimaryKeyID"]
-  }
+  }}
 }}
 """
 
@@ -197,9 +201,6 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 [HINTS FOR ENTITY RESOLUTION (EXACT VALUES)]
 {entity_hints}
 If a value listed above explicitly refers to a column you are about to filter, you MUST use the value indicated in the HINTS instead of the generic word provided by the user.
-
-
-
 
 ### OPERATIONAL CONSTRAINTS
 - INPUT: A user query in Italian, the exact DDL schema of the relevant tables, and analytical context (filters, operations, join paths).
@@ -221,6 +222,9 @@ Your task is to analyse the error, diagnose the problem based on the Error Taxon
 --- CONTEXT INFORMATION ---
 Original question from the user: {user_query}
 Relevant tables: {selected_tables}
+
+Extracted Semantic Rules:
+{extracted_info}
 
 DDL schema of tables:
 {schema_ddl}

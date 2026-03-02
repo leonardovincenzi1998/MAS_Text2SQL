@@ -1,4 +1,5 @@
 import os
+from langchain_openai import ChatOpenAI
 
 # Base Paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
