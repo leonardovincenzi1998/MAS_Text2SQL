@@ -33,7 +33,7 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 - LANGUAGE FOR REASONING: English.
 - LANGUAGE FOR ENTITIES/INTENT: Italian (must match the Database schema).
 - NO CONVERSATIONAL FILLERS: Do not say "Here is the result" or "Sure".
-- THINK STEP BY STEP: Focus on understanding the request of the user querying the database. If the request is complicated or long, break it down into pieces and think about what detailed information the user is looking for.
+- THINK STEP BY STEP BUT BE CONCISE: Focus on understanding the request. Keep your "reasoning" extremely short (maximum 3 sentences). Do not over-explain.
 
 ### EXTRACTION LOGIC & HIERARCHY
 1. **Intent Extraction**: 
@@ -53,7 +53,7 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 
 ### JSON SCHEMA
 {{
-  "reasoning": "Very briefly explanation in few sentences: the key entities, operations and possible filters detected, and why specific SQL operators were chosen.",
+  "reasoning": "Very briefly explanation [MAX 3 Sentences] about the key entities, operations and possible filters detected, and why specific SQL operators were chosen.",
   "intent": "Concise summary in Italian.",
   "entities": ["list", "of", "italian", "terms"],
   "search_keywords": ["area", "aree", "dipartimento", "bene", "beni", "mobile", "mobili", "cdg", "cdc"],
@@ -108,7 +108,6 @@ Your expertise lies in analyzing Italian natural language queries and selecting 
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
-Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query.
 
 ### OPERATIONAL CONSTRAINTS
 - INPUT: Italian user query and a Candidate Schema (Tables, Columns, Foreign Keys, Samples).
@@ -119,19 +118,14 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 - THINK STEP BY STEP: Focus heavily on data relationships and table linkages (JOINs) needed to retrieve the requested info.
 
 ### SELECTION LOGIC & CRITERIA
-1. **Semantic Matching**: Read all column names, descriptions and samples for each table and column. Do NOT assume a table contains data if you don't see the column. If the user asks for an "address", look for tables with "Via", "Civico", "Comune" (e.g., `Edifici`). 
+1. **Semantic Concept Matching**: Focus on finding the tables that contain the core entities and attributes requested by the user. If the user asks for an "address", look for tables with "Via", "Civico", "Comune" (e.g., `Edifici`). 
 2. **Foreign Key Chaining (CRITICAL)**: Bridge tables (e.g., `MobiliLocali`, `MobiliSottoSpeci`) are never enough to get textual details. You MUST follow the `[FK->Table.Column]` annotations to reach the final descriptive table (e.g., `Locali`, `Speci`).
 3. **The ID Rule**: Columns starting with `Id` (e.g., `IdSottoSpecie`) contain ONLY numerical codes. If the user asks for "details", "name", or "description", you CANNOT stop at the ID column. You MUST include the target table.
 4. **Discard Noise**: Ignore tables that were retrieved by the semantic search but are irrelevant to the specific user intent.
 
-###STRICT DATA RETRIEVAL RULES
-1. EXPLICIT CONSTRAINTS ONLY: Apply filters (e.g., status, state, type) ONLY when the user explicitly requests them via specific natural language keywords. Do not assume, inject, or enforce default business filters (e.g., "active only," "non-deleted") unless the user explicitly directs you to do so.
-2. RETRIEVAL LOGIC VS. USER CONSTRAINTS: Clearly distinguish between retrieval logic (the technical requirements to satisfy the query, such as "current location" or "latest version") and user constraints (operational filters requested by the user, such as "active," "valid," or "public"). Satisfy the former to correctly answer the query, but do not turn the former into the latter.
-3.LITERAL FIDELITY: Your role is to act as a precision tool for data retrieval based on the user's intent. Do not enforce implicit organizational business logic, assumptions of data quality, or standard operating procedures that were not specified in the input query.
-
 ### JSON SCHEMA
 {{
-"reasoning": "Step-by-step English logic. CRITICAL: You MUST explicitly write down in few sentences which exact table contains the columns requested by the user's filters (e.g., 'valore', 'etichetta') by checking the schema, then state the join path.",
+"reasoning": "Briefly explain [MAX 3 Sentences] which tables are needed to cover the user's concepts. DO NOT mention, assume, or justify based on status filters (like 'active' or 'deleted'). Focus ONLY on JOIN paths.", 
 "central_entity": "The exact name of the main driving table representing the core subject (e.g., 'BeniMobili').",
 "relevant_tables": ["List", "of", "exact", "table", "names"]
 }}
@@ -142,7 +136,7 @@ Input:
 QUERY: "Dimmi in quali stanze si trovano gli armadi e a che piano sono."
 SCHEMA: [Context with BeniMobili, MobiliLocali, Locali, Edifici, SottoSpeci...]
 Output: {{
-"reasoning": "The core entity is 'BeniMobili' (armadi). The user wants to know the room ('stanze') and the floor ('piano'). Looking at the schema, the floor ('Piano') and room description are in the 'Locali' table. To link 'BeniMobili' to 'Locali', we must traverse the bridge table 'MobiliLocali' using 'IdBeneMobile' and 'IdLocale'. No other tables are needed.",
+"reasoning": "The core entity is 'BeniMobili' (armadi). The user wants to know the room ('stanze') and the floor ('piano'). Looking at the schema, the floor and room description are in the 'Locali' table. To link 'BeniMobili' to 'Locali', we must traverse the bridge table 'MobiliLocali'.",
 "central_entity": "BeniMobili",
 "relevant_tables": ["BeniMobili", "MobiliLocali", "Locali"]
 }}
@@ -151,7 +145,7 @@ Input:
 QUERY: "Quante schede patrimoniali attive abbiamo inserito nel 2019?"
 SCHEMA: [Context with SchedePatrimoniali, TipiValoreInv, Locali...]
 Output: {{
-"reasoning": "The user asks for a count of active patrimonial cards ('schede patrimoniali attive') filtered by insertion year (2019). The 'SchedePatrimoniali' table contains both the 'IsSchedaAttiva' flag and the 'DTInserimento' date. No foreign keys need to be resolved for descriptions.",
+"reasoning": "The user asks for a count of patrimonial cards ('schede patrimoniali') based on status and insertion year. All requested concepts, including status flags and dates, reside within the 'SchedePatrimoniali' table. No external joins are needed.",
 "central_entity": "SchedePatrimoniali",
 "relevant_tables": ["SchedePatrimoniali"]
 }}
@@ -160,10 +154,10 @@ Input:
 QUERY: "Quali sono i codici ARCONET dei piani economici usati per le nostre categorie contabili?"
 SCHEMA: [Context with Categorie, PianiEcoStatiPatrimoniali, Locali...]
 Output: {{   
-"reasoning": "The main topic is accounting categories ('Categorie'). To find the ARCONET codes ('codici ARCONET'), we must look at the 'PianiEcoStatiPatrimoniali' table, because 'Categorie' only has an 'IdPianoEcoStatoPatrimoniale' numerical column. We need both tables to resolve the relation.",
+"reasoning": "The main topic is accounting categories ('Categorie'). To find the ARCONET codes, we must look at the 'PianiEcoStatiPatrimoniali' table, because 'Categorie' only has the numerical foreign key. We need both tables to resolve the relation.",
 "central_entity": "Categorie",
 "relevant_tables": ["Categorie", "PianiEcoStatiPatrimoniali"]
-}}   
+}}
 """
 
 # Prompt per src/agent.py -> Column Selector (Agente 2.5)
@@ -173,7 +167,7 @@ You are a Data Analyst and Database Architect. Your task is to perform precision
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
-Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query.
+Please note: The database contains many Boolean columns (0/1) beginning with “Is” (e.g. IsGies, IsStampato), these are often technical flags of the management application and may not be semantically relevant to the end user.. You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query.
 
 ### OPERATIONAL CONSTRAINTS
 - You will receive the user query and the schema (in Markdown format) EXCLUSIVELY for tables that have already been confirmed as necessary.
@@ -186,21 +180,59 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 1. NO IMPLICIT DEFAULTS: Do not hallucinate or assume default filters. Only apply boolean flags or status filters if the user's natural language EXPLICITLY demands them with specific keywords (e.g., "active", "valid", "deleted"). Do not assume a "default active" state unless the user specifically asks for it.
 2. SEMANTIC PRECISION: Do not conflate different concepts. For instance, temporal/positional terms (like "currently", "latest", "historical") are distinct from operational status terms (like "active", "enabled", "discarded"). Map each user concept strictly to its distinct corresponding column, without adding unrelated conditions.
 3. CRITICAL EVALUATION: Evaluate the suggestions from both Agent 1 and Agent 2 critically. If they suggest a status filter (like 'active') that was NOT in the user's original Italian query, ignore that suggestion and do not select the corresponding column.
+5. FILTER ISOLATION (NO BROADCASTING): A single adjective or temporal modifier in the user's query (e.g., related to time, status, or condition) generally applies to ONLY ONE specific entity or action. Map it to the single most relevant table (often the bridge table for temporal assignments, or a specific registry table for statuses). NEVER broadcast or duplicate the same conceptual filter across multiple joined tables just because they possess similar boolean flags.
 
 ### INSTRUCTIONS FOR REASONING
-1. Map explicit words from the user's query to boolean filters (e.g., "attualmente" -> IsUltimo=1). 
-2. If no specific status is requested, state "No status filters needed".
-3. List Target columns, WHERE filters, and Keys. 
-Keep it under 40 words total.
+Your reasoning MUST be strictly formatted in EXACTLY 3 short bullet points:
+1. SELECT: Identify the target columns requested for the final output.
+2. WHERE: Identify columns for filters. Map explicit words from the user's query to boolean flags. Apply the Semantic Opposites rule here if needed. If no specific status is requested, state "No status filters needed".
+3. JOIN: List all the required Primary and Foreign keys necessary to correctly link the tables.
+Keep it highly analytical and concise.
 
 ### JSON SCHEMA
 {{
-    "reasoning": "Your brief justification and column mapping.",
-  {{
+  "reasoning": "The step-by-step reasoning strictly formatted in the 3 bullet points requested (1. SELECT, 2. WHERE, 3. JOIN).",
+  "table_columns": {{
     "TableName1": ["ColumnA", "KeyIDB", "PrimaryKeyID"],
     "TableName2": ["KeyIDB", "ColumnC", "PrimaryKeyID"]
   }}
 }}
+
+#####FEW-SHOT EXAMPLES#####
+
+Input:
+QUERY: "Forniscimi l'elenco e la descrizione dei beni mobili attivi."
+SCHEMA: [Markdown Context with BeniMobili (columns: IdBeneMobile, Descrizione, Valore, isEliminato, IsStampato)...]
+Output: {{
+  "reasoning": "1. SELECT: 'Descrizione'. 2. WHERE: 'isEliminato' (applying Semantic Opposites: mapping the positive request 'attivi' to the negative boolean flag isEliminato=0). 3. JOIN: 'IdBeneMobile' as primary key.",
+  "table_columns": {{
+    "BeniMobili": ["IdBeneMobile", "Descrizione", "isEliminato"]
+  }}
+}}
+
+Input:
+QUERY: "In quale locale e a che piano si trova attualmente l'armadio in metallo?"
+SCHEMA: [Markdown Context with BeniMobili, MobiliLocali, Locali...]
+Output: {{
+  "reasoning": "1. SELECT: 'Descrizione' (BeniMobili), 'Denominazione', 'Piano' (Locali). 2. WHERE: 'IsUltimo' (MobiliLocali) to precisely map the temporal concept 'attualmente'. 3. JOIN: 'IdBeneMobile', 'IdMobileLocale', 'IdLocale' to link the three tables.",
+  "table_columns": {{
+    "BeniMobili": ["IdBeneMobile", "Descrizione"],
+    "MobiliLocali": ["IdMobileLocale", "IdBeneMobile", "IdLocale", "IsUltimo"],
+    "Locali": ["IdLocale", "Denominazione", "Piano"]
+  }}
+}}
+
+Input:
+QUERY: "Mostrami quanti locali ci sono per ogni edificio, indicando la denominazione dell'edificio."
+SCHEMA: [Markdown Context with Locali, Edifici...]
+Output: {{
+  "reasoning": "1. SELECT: 'Denominazione' (Edifici), 'IdLocale' (Locali) for the count. 2. WHERE: No status filters needed as the user did not explicitly ask for 'active' or 'current'. 3. JOIN: 'IdEdificio' to link the tables.",
+  "table_columns": {{
+    "Locali": ["IdLocale", "IdEdificio"],
+    "Edifici": ["IdEdificio", "Denominazione"]
+  }}
+}}
+
 """
 
 # Prompt per src/agent.py -> SQL Generator
@@ -211,8 +243,7 @@ Your expertise lies in translating Italian natural language queries into precise
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset types (Species), depreciation, physical locations (Buildings, Premises), values and purchase orders (Values), accounting aspects (Ledgers, Assets) and state of conservation.
-Please note: The database contains various Boolean flags (0/1). You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query. Be cautious with technical flags, but trust the Column Selector Reasoning if it suggests using them to satisfy constraints like "current/attualmente" or "active/attivo".
-
+Please note: The database contains many Boolean columns (0/1) beginning with “Is” (e.g. IsGies, IsStampato), these are often technical flags of the management application and may not be semantically relevant to the end user. You must use a flag ONLY IF its meaning directly maps to a specific concept expressed in the user's query.
 
 [HINTS FOR ENTITY RESOLUTION (EXACT VALUES)]
 {entity_hints}
