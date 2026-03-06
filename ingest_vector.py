@@ -95,8 +95,12 @@ def analyze_columns_smart(
             safe_col = f'"{col_name}"'
             
             is_structural = col_name in structural_cols
-            is_boolean = col_name.startswith("Is") or col_name.startswith("is") or "BIT" in col_type or "BOOL" in col_type
-
+            is_boolean_or_important = (
+                col_name.startswith("Is") or col_name.startswith("is") or 
+                "BIT" in col_type or "BOOL" in col_type or
+                "PERCENTUALE" in col_name.upper() or "VALORE" in col_name.upper()
+)
+            
             # formulate query based on numeric vs text types
             if any(x in col_type for x in ['INT', 'REAL', 'NUM', 'DEC', 'FLOAT', 'DOUBLE']):
                 empty_condition = f"{safe_col} IS NULL OR {safe_col} = 0"
@@ -124,7 +128,7 @@ def analyze_columns_smart(
             keep = False
             if total == 0:
                 keep = False
-            elif is_structural or is_boolean:
+            elif is_structural or is_boolean_or_important:
                 keep = True
             elif sparsity >= threshold_sparsity:
                 keep = False
@@ -158,7 +162,7 @@ def analyze_columns_smart(
 
         # 3. report construction
         if categorical_hints:
-            report_lines.append("--- VALORI CATEGORICI RILEVATI ---")
+            report_lines.append("---CATEGORICAL VALUES FOUND ---")
             report_lines.extend(categorical_hints)
             report_lines.append("")
 
@@ -166,7 +170,7 @@ def analyze_columns_smart(
             drop_str = ", ".join(dropped_columns[:20]) 
             if len(dropped_columns) > 20: 
                 drop_str += "..."
-            report_lines.append(f"⚠️ COLONNE IGNORATE (Vuote/Costanti): {drop_str}\n")
+            report_lines.append(f"⚠️ COLUMNS IGNORED (Empty/Constant): {drop_str}\n")
 
         if kept_columns:
             cols_query = ", ".join([f'"{c}"' for c in kept_columns])
@@ -184,14 +188,15 @@ def analyze_columns_smart(
                 if samples:
                     column_samples[col] = list(samples)[:3] 
 
-            report_lines.append("--- CAMPIONE DATI ---")
+            report_lines.append("--- DATA SAMPLES ---")
             for row in rows[:3]:
                 report_lines.append(str(dict(row)))
         else:
-            report_lines.append("Nessuna colonna significativa trovata.")
+            report_lines.append("No significant columns found.")
 
     except Exception as e:
-        return f"Errore analisi smart: {e}", [], {}
+        print(f"   ⚠️ ERRORE INTERNO in analyze_columns_smart su {table_name}: {e}")
+        return f"Smart Analysis Error: {e}", [], {}
     finally:
         conn.close()
     
@@ -220,7 +225,7 @@ def get_foreign_keys_robust(db_path: str, table_name: str) -> List[Dict[str, str
     return results
 
 def get_global_pks(db_path: str, tables: List[str]) -> Dict[str, str]:
-    """Scansiona tutte le tabelle e mappa NomeColonnaPK -> NomeTabella"""
+    """Looks across all tables and maps Primary Key Column Names -> Table Names"""
     global_pks = {}
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -299,7 +304,7 @@ async def process_single_table(
 
             # Fallback if there are no extracted columns (logic moved from tools.py)
             if not significant_cols:
-                significant_cols = re.findall(r'(\w+)\s+(?:INT|TEXT|REAL|CHAR|DATE)', ddl, re.IGNORECASE)
+                significant_cols = re.findall(r'(\w+)\s+(?:INT|TEXT|REAL|CHAR|DATE|FLOAT|DOUBLE|NUMERIC)', ddl, re.IGNORECASE)
 
             # Cleaning categories to limit payload (logic moved from tools.py)
             categorical_lines = []
@@ -314,7 +319,7 @@ async def process_single_table(
                 smart_hints += "\n..."
 
             # --- PHASE C: LLM DESCRIPTION ---
-            user_content = f"--- DDL TABELLA ---\n{ddl}\n\n{stats_text}"
+            user_content = f"--- DDL TABLE ---\n{ddl}\n\n{stats_text}"
             result = await agent.run(user_content)
             description = getattr(result, "data", getattr(result, "output", str(result))).strip()
         
@@ -329,15 +334,20 @@ async def process_single_table(
             }
 
             # --- PHASE E: VECTOR DB UPSERT (The DDL goes only in the document, not in the metadata) ---
+            vector_hints_lines = [line for line in stats_text.split('\n') if line.strip().startswith("- Colonna")]
+            vector_hints = "\n".join(vector_hints_lines)
+
             rich_document = f"""
-            DESCRIZIONE SEMANTICA:
+            TABLE NAME: {canonical_name} ({real_table_name})
+
+            SEMANTIC DESCRIPTION:
             {description}
-            
-            DETTAGLI TECNICI E CATEGORIE:
-            {stats_text}
-            
-            SCHEMA SQL (DDL):
-            {ddl}
+
+            MAIN COLUMNS CONTAINED:
+            {', '.join(significant_cols)}
+
+            CATEGORICAL VALUES FOUND:
+            {vector_hints}
             """
 
             collection.upsert(

@@ -149,3 +149,8 @@ Step 4: Definisci la Complessità Desiderata
 Easy: Singola tabella, condizioni WHERE semplici.
 Medium: 1-2 JOIN, funzioni di aggregazione (COUNT, SUM), GROUP BY.
 Hard: Multipli JOIN, Subqueries annidate
+
+
+
+
+srun --jobid=33546 --overlap --pty /bin/bash

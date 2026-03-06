@@ -33,8 +33,6 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
                 colonne_scelte_llm = state.get("selected_columns", {}).get(table, [])
                 
                 # choose the authorised columns:
-                # if Agent 2.5 has chosen the columns, use those
-                # otherwise, use all the clean ones found during Ingestion as a fallback
                 if colonne_scelte_llm:
                     allowed_cols = set(colonne_scelte_llm)
                 else:
@@ -47,28 +45,30 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
                 meta_comment = format_table_metadata_as_sql_comment(tbl_data, allowed_cols)
                 ddl_context += f"-- Schema for {table}:\n{clean_ddl}\n{meta_comment}\n\n"
             else:
-                # security fallback: if it cannot find the metadata, pass the entire DDL
                 ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
 
-        #DEBUG: save the enriched DDL context to a file for inspection
+        #DEBUG
         with open("debug_enriched_ddl.sql", "w", encoding="utf-8") as f:
             f.write(ddl_context)
         print("   💾 (SQL Generator) DDL arricchito salvato in 'debug_enriched_ddl.sql'")
         
     except Exception as e:
         return {"error": f"DDL extraction error: {str(e)}"}    
-                
-    except Exception as e:
-        return {"error": f"DDL extraction error: {str(e)}"}
+    # RIMOSSO IL SECONDO EXCEPT DUPLICATO
 
     # format analytical context from agent 1
     extraction = state.get("extraction_result")
     extracted_info = "None"
 
     if extraction:
+        # --- CORREZIONE FORMATTAZIONE ENTITA' ---
+        entities_str = "Nessuna"
+        if hasattr(extraction, 'entities') and extraction.entities:
+            entities_str = ", ".join([f"[{e.category}: '{e.value}']" for e in extraction.entities])
+            
         extracted_info = (
             f"Intent: {extraction.intent}\n"
-            f"Entities: {extraction.entities}\n"
+            f"Entities: {entities_str}\n"
             f"Operations: {extraction.operations}\n"
             f"Filters: {extraction.filters}"
         )
@@ -77,21 +77,22 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
 
     # retrieve graph/table selector reasoning from agent 2 to guide joins
     messages = state.get("messages", [])
-    agent2_reasoning = "Nessun ragionamento Tabelle."
-    agent25_reasoning = "Nessun ragionamento Colonne."
+    agent2_reasoning = "No table selection reasoning available."
+    agent25_reasoning = "No column selection reasoning available."
 
     for msg in messages:
         content = msg.content if hasattr(msg, 'content') else str(msg)
-        if "Tabelle Selezionate:" in content:
+        if "Tables Selected:" in content:
             agent2_reasoning = content
-        elif "Colonne Selezionate:" in content:
+        elif "Columns Selected:" in content:
             agent25_reasoning = content
             
-    combined_reasoning = f"--- RAGIONAMENTO JOIN (Agente 2) ---\n{agent2_reasoning}\n\n--- RAGIONAMENTO COLONNE E FILTRI (Agente 2.5) ---\n{agent25_reasoning}"
+    combined_reasoning = f"--- JOIN REASONING (Agente 2) ---\n{agent2_reasoning}\n\n--- COLUMN & FILTER REASONING (Agente 2.5) ---\n{agent25_reasoning}"
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", SQL_GENERATOR_SYSTEM_PROMPT),
-        ("human", "### CONTESTO\n[ENRICHED DDL SCHEMA]\n{ddl_context}\n\n[INFO ESTRATTE]\n{extracted_info}\n{entity_hints}\n\n[SUGGERIMENTO JOIN LOGIC]\n{reasoning}\n\n### DOMANDA UTENTE\n{query}\n\nOutput:")    ])
+        ("human", "### CONTEXT\n[ENRICHED DDL SCHEMA]\n{ddl_context}\n\n[EXTRACTED INFO]\n{extracted_info}\n\n[JOIN LOGIC SUGGESTIONS]\n{reasoning}\n\n### USER QUESTION\n{query}\n\nOutput:")
+    ])
     
     chain = prompt | llm_sql
 
@@ -108,7 +109,7 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         raw_sql = response.content.strip()
         clean_sql = raw_sql.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()
         
-# execution of the ast validator
+        # execution of the ast validator
         print("   🔍 (AST Validator) Controllo conformità Tabelle e Colonne...")
         final_sql, validation_error = validate_ast_and_format(clean_sql, selected_tables, selected_columns)
         
@@ -116,16 +117,16 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
             print("   ⚠️ (AST Validator) Errore rilevato. Invio al Critic Agent.")
             return {
                 "generated_sql": final_sql,
-                "execution_status": False,  # bypass Sandbox and trigger Critic
+                "execution_status": False,  
                 "error_traceback": validation_error,
-                "messages": [f"❌ Generazione Fallita (AST):\n{validation_error}"]
+                "messages": [f"❌ Failed SQL Generation (AST):\n{validation_error}"]
             }
         
         print("   ✅ (AST Validator) Sintassi e Schema Linking confermati.")
 
         return {
             "generated_sql": final_sql,
-            "messages": [f"✅ SQL Generato:\n{final_sql}"]
+            "messages": [f"✅ Generated SQL:\n{final_sql}"]
         }
         
     except Exception as e:

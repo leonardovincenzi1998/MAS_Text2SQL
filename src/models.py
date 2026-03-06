@@ -7,14 +7,22 @@ from langgraph.graph.message import add_messages
 
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
 
+
+class ExtractedEntity(BaseModel):
+    category: str = Field(description="The conceptual category of the entity (e.g. 'SottoSpecie', 'Locale', 'Anno', 'CondizioneGiuridica', 'Valore').")
+    value: str = Field(description="The exact value mentioned by the user (e.g., 'scrivanie in legno', 'Seminterrato', '2022', 'ABC').")
+
 # Structured output for the entity extraction agent
 class ExtractionResult(BaseModel):
-    reasoning: str = Field(..., description="EXTREMELY CONCISE step-by-step logic in English (MAX 2-3 SENTENCES) explaining why specific SQL operators were chosen")
+    reasoning_steps: List[str] = Field(...,description="List of 2-3 short sentences explaining the intent, entities, and filters. E.g., ['User wants active buildings.', 'Filter added for active status.']")
     intent: str = Field(..., description="Concise description of the user's information retrieval goal.")
-    entities: List[str] = Field(default_factory=list, description="List of tangible or named entities (e.g., locations, table names).")
+    entities: List[ExtractedEntity] = Field(
+        default_factory=list, 
+        description="List of key entities extracted, categorised by type."
+    )
     search_keywords: List[str] = Field(default_factory=list, description="SEO-like keywords optimized for DB search (includes singular/plural forms and synonyms).")
-    operations: List[str] = Field(default_factory=list, description="List of analytical operations to translate into SQLite (e.g., 'MEAN', 'COUNT').")
-    filters: List[str] = Field(default_factory=list, description="Specific conditions identified, e.g., 'surface > 100'.")
+    operations: List[str] = Field(default_factory=list, description="List of exact SQLite clauses and aggregate functions required (e.g., 'SELECT', 'WHERE', 'COUNT', 'AVG', 'GROUP BY', 'ORDER BY', 'LIMIT', 'DISTINCT').")
+    filters: List[str] = Field(default_factory=list, description="Specific conditions requested by the user IN NATURAL LANGUAGE, e.g., 'Il bene deve essere attivo'. DO NOT use SQL syntax.")
 
 class SearchSchemaInput(BaseModel):
     query: str = Field(description="Entity or keywords to search for.")
@@ -22,14 +30,13 @@ class SearchSchemaInput(BaseModel):
     
 # Structured output for the table selection agent
 class TableSelectionResult(BaseModel):
+    reasoning: str = Field(description="EXTREMELY SHORT logical explanation (max 3 sentences) specifying which tables are necessary for the query.")
     central_entity: str = Field(description="The main table that the query revolves around (e.g., 'BeniMobili').")
-    reasoning: str = Field(description="EXTREMELY SHORT logical explanation (max 3 sentences) specifying which tables are used.")
     relevant_tables: List[str] = Field(default_factory=list, description="Exact list of selected table names including bridge tables.")
-    is_ambiguous: bool = Field(default=False, description="True if the query is too vague to select tables with certainty.")
 
 # Structured output for the column selection agent (Agent 2.5)
 class ColumnSelectionResult(BaseModel):
-    reasoning: str = Field(description="Brief explanation of why these columns were chosen for filters, JOINs or SELECTs.")
+    reasoning: str = Field(description="EXTREMELY SHORT explanation [max of 3 sentences] of why these columns were chosen for filters, JOINs or SELECTs.")
     table_columns: Dict[str, List[str]] = Field(description="Dictionary with exact “table_name” as key and list of exact “column_names” as value.")
     
 # Represents the state of the LangGraph multi-agent workflow

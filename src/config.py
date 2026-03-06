@@ -32,14 +32,27 @@ LOCAL_MODEL_PATH = os.getenv("EMBEDDING_MODEL_PATH", DEFAULT_LOCAL_MODEL_PATH)
 # 1. LLM for Agent 1 and 2 (Entity Extraction and Table Selection)
 # Used light penalties to avoid reasoning loops
 # and max_tokens as an extreme safety valve.
+llm_extractor = ChatOpenAI(
+    model=LLM_MODEL_NAME,
+    openai_api_base=BASE_URL,
+    openai_api_key=API_KEY,
+    temperature=0.1,
+    max_tokens=1500,
+    #presence_penalty=0.3,
+    frequency_penalty=0.8
+)
+
+
+# 2. LLM for Agent 2 and 2.5 (Table & Column Selection / Schema Linking)
+# ZERO PENALITÀ: devono poter ripetere i nomi esatti di tabelle e colonne senza paura.
 llm_reasoning = ChatOpenAI(
     model=LLM_MODEL_NAME,
     openai_api_base=BASE_URL,
     openai_api_key=API_KEY,
     temperature=0.1,
-    #max_tokens=2000,
-    presence_penalty=0.3,
-    frequency_penalty=0.3
+    max_tokens=2000,
+    #presence_penalty=0.3,
+    #frequency_penalty=0.3
 )
 
 # # 2. LLM for Agent 3 (SQL Generation)

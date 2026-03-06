@@ -16,7 +16,7 @@ async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
     
     query = state.get("generated_sql")
     if not query:
-        return {"execution_status": False, "error_traceback": "Nessuna query SQL generata da eseguire."}
+        return {"execution_status": False, "error_traceback": "No SQL query generated to execute."}
     
     db_manager = DatabaseManager(state["db_path"])
     conn = db_manager.get_connection()
@@ -40,9 +40,9 @@ async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
         # data Inspection: Checking for ‘empty results’
         if len(data_sample) == 0:
             msg_errore_logico = (
-                "L'esecuzione ha avuto successo sintatticamente, ma il risultato è vuoto (0 righe). "
-                "Potrebbe esserci un disallineamento nei filtri (WHERE), discrepanze di maiuscole/minuscole "
-                "nei valori testuali, o condizioni di JOIN troppo restrittive."
+                "The execution succeeded syntactically, but the result is empty (0 rows). "
+                "There might be a misalignment in the filters (WHERE), discrepancies in uppercase/lowercase "
+                "in the textual values, or JOIN conditions too restrictive."
             )
             print("   ⚠️ (Sandbox) Anomalia semantica: Risultato vuoto rilevato.")
             return {
@@ -60,7 +60,7 @@ async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
         
     except sqlite3.Error as e:
         # Execution-Guided Feedback: Capture the actual database stack trace
-        traceback_str = f"Errore SQLite ({type(e).__name__}): {str(e)}"
+        traceback_str = f"SQLite error ({type(e).__name__}): {str(e)}"
         print(f"   ❌ (Sandbox) Errore di Runtime: {traceback_str}")
         return {
             "execution_status": False,
@@ -77,7 +77,7 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
     user_query = state["user_query"]
     selected_tables = state["selected_tables"]
     wrong_sql = state.get("generated_sql", "")
-    error_traceback = state.get("error_traceback", "Errore sconosciuto")
+    error_traceback = state.get("error_traceback", "Unknown error")
     
     # 2. reconstruction of the DDL for Critic
     # critic receives ALL columns saved in ingestion, bypassing the Column Selector
@@ -101,9 +101,15 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         else:
             critic_ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
     
-    # recupero extraction
+    # --- CORREZIONE FORMATTAZIONE ENTITA' PER IL CRITIC ---
     extraction = state.get("extraction_result")
-    extracted_info = f"Entità: {getattr(extraction, 'entities', [])} | Filtri: {getattr(extraction, 'filters', [])}" if extraction else "Nessuna estrazione."
+    extracted_info = "No extraction available."
+    if extraction:
+        entities_str = "None"
+        if hasattr(extraction, 'entities') and extraction.entities:
+            entities_str = ", ".join([f"[{e.category}: '{e.value}']" for e in extraction.entities])
+            
+        extracted_info = f"Entities: {entities_str} | Filters: {getattr(extraction, 'filters', [])}"
 
     # 3. prompt formatting
     prompt = QUERY_CRITIC_PROMPT.format(
@@ -115,7 +121,7 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         error_traceback=error_traceback
     )
     
-    #4. invoking LLM with Structured Output
+    # 4. invoking LLM with Structured Output
     messages = [SystemMessage(content=prompt)]
     structured_llm = llm_reasoning.with_structured_output(CriticResult).with_retry(stop_after_attempt=3)
     
@@ -138,5 +144,5 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         print(f"   ❌ (Critic) Errore durante la generazione della correzione: {e}")
         return {
             "retry_count": current_retries + 1,
-            "error": f"Errore del Critic Agent: {str(e)}"
+            "error": f"Critic Agent Error: {str(e)}"
         }

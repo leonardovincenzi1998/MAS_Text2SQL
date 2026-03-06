@@ -8,11 +8,12 @@ from src.nodes.column_selector import run_column_selector
 from src.nodes.sql_generator import run_sql_generator
 from src.nodes.sandbox_critic import run_execution_sandbox, run_query_critic
 from src.nodes.value_linker import run_value_linker
-
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
 # conditional routing function
 def routing_decision(state: AgentState) -> str:
-    """Decide se terminare, o invocare l'agente Critic in base ai risultati della Sandbox."""
+    """Decide whether to end or invoke the Critic agent based on the results of the Sandbox."""
     status = state.get("execution_status")
     retries = state.get("retry_count", 0)
     MAX_RETRIES = 3 # limit to avoid infinite loops

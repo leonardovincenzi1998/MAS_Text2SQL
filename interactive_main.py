@@ -100,9 +100,9 @@ async def main():
                 messages = final_state.get("messages", [])
                 for msg in messages:
                     content = msg.content if hasattr(msg, 'content') else str(msg)
-                    if "✅ Tabelle Selezionate:" in content:
+                    if "✅ Selected Tables:" in content:
                         print(f"\n🧠 [Ragionamento Agente 2 - Table Selector]:\n{content}")
-                    elif "✅ Colonne Selezionate:" in content:
+                    elif "✅ Selected Columns:" in content:
                         print(f"\n🧠 [Ragionamento Agente 2.5 - Column Selector]:\n{content}")
 
                 # agent 3: sql generation

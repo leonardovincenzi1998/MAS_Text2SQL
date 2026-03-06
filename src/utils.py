@@ -177,14 +177,14 @@ def format_schema_for_llm(schema_list: list, selected_columns: Optional[Dict[str
         col_tuples = [formatted_cols_dict.get(col, col) for col in cols_to_keep]
             
         # pseudo-markdown construction
-        tbl_md = f"### Tabella: {name}\n"
+        tbl_md = f"### Table: {name}\n"
         
         if desc and desc.strip() and desc != "Unknown": 
-            tbl_md += f"Descrizione: {desc}\n"
+            tbl_md += f"Description: {desc}\n"
             
-        tbl_md += f"Colonne: ( {', '.join(col_tuples)} )\n"
+        tbl_md += f"Columns: ( {', '.join(col_tuples)} )\n"
         if cat_vals: 
-            tbl_md += f"Valori Notevoli:\n{cat_vals}\n"
+            tbl_md += f"Notable Values:\n{cat_vals}\n"
             
         formatted_tables.append(tbl_md)
         
@@ -234,7 +234,7 @@ def validate_ast_and_format(
         selected_tables_lower = [t.lower() for t in selected_tables]
         for table in used_tables:
             if table not in selected_tables_lower:
-                return raw_sql, f"AST Error (Schema Linking): La query usa la tabella '{table}', ma non è tra quelle autorizzate {selected_tables}."
+                return raw_sql, f"AST Error (Schema Linking): The query uses the table '{table}', but it is not among the authorized tables {selected_tables}."
 
         # columns validation (only for agent 2.5)
         if selected_columns:
@@ -267,7 +267,7 @@ def validate_ast_and_format(
                     
                     if real_table and real_table in allowed_cols_lower:
                         if col_name not in allowed_cols_lower[real_table]:
-                            return raw_sql, f"AST Error (Column Linking): La colonna '{column.name}' non è autorizzata per la tabella '{real_table}'."
+                            return raw_sql, f"AST Error (Column Linking): The column '{column.name}' is not authorized for the table '{real_table}'."
                 else:
                     # case b: Valore
                     is_authorized = False
@@ -277,16 +277,16 @@ def validate_ast_and_format(
                             break
                     
                     if not is_authorized:
-                         return raw_sql, f"AST Error (Column Linking): La colonna '{column.name}' usata nella query non è tra le colonne selezionate dall'Agente 2.5."
+                         return raw_sql, f"AST Error (Column Linking): The column '{column.name}' used in the query is not among the selected columns for Agent 2.5."
 
         # final formatting
         clean_sql = parsed_ast.sql(dialect="sqlite", pretty=True)
         return clean_sql, None
 
     except errors.ParseError as e:
-        return raw_sql, f"AST Syntax Error: La query generata non è sintatticamente valida per SQLite. Dettagli: {str(e)}"
+        return raw_sql, f"AST Syntax Error: The generated query is not syntactically valid for SQLite. Details: {str(e)}"
     except Exception as e:
-        return raw_sql, f"AST Validation Error: Eccezione durante la validazione dell'AST: {str(e)}"
+        return raw_sql, f"AST Validation Error: Exception during AST validation: {str(e)}"
     
 def prune_ddl_ast(raw_ddl: str, allowed_columns: set) -> str:
     """
@@ -308,7 +308,7 @@ def prune_ddl_ast(raw_ddl: str, allowed_columns: set) -> str:
                     col_name = node.name.lower()
                     # keep the column if it is explicitly chosen
                     # or if it is a key (starts with “id”) to ensure correct JOIN
-                    if col_name in allowed_lower or col_name.startswith("id"):
+                    if col_name in allowed_lower: #or col_name.startswith("id"):
                         new_expressions.append(node)
                 else:
                     # if it is a table constraint (e.g. CONSTRAINT ... FOREIGN KEY ...)

@@ -20,7 +20,7 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
         # Keep the user query for semantic context, but give keywords enormous weight.
         vector_search_query = f"{state['user_query']} {keywords_str} {keywords_str}"
     elif extraction and extraction.entities:
-        entities_str = " ".join(extraction.entities)
+        entities_str = " ".join([e.value for e in extraction.entities])
         vector_search_query = f"{state['user_query']} {entities_str}"
     else:
         vector_search_query = state["user_query"]
@@ -30,9 +30,9 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     # schema retrieval via chromadb tool
     try:
         # retrieve generous number of tables to provide context
-        schema_json = search_schema_tool.invoke({"query": vector_search_query, "k": 6}) #mettere k = 7 con Llama 70B per evitare di sforare i token 
+        schema_json = search_schema_tool.invoke({"query": vector_search_query, "k": 10}) #mettere k = 7 con Llama 70B per evitare di sforare i token 
     except Exception as e:
-        return {"error": f"Errore Chroma: {str(e)}"}
+        return {"error": f"Chroma error: {str(e)}"}
     
     # parsing and markdown generation
     try:
@@ -57,13 +57,24 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     # llm selection
     print("🧠 (Table Selector) Filtering intelligente...")
 
-    ext_context = "Nessuna estrazione fornita."
+    ext_context = "No extraction provided."
     if extraction:
-        ext_context = f"- Intento: {getattr(extraction, 'intent', '')}\n- Entità: {getattr(extraction, 'entities', [])}\n- Filtri: {getattr(extraction, 'filters', [])}"
+        clean_filters = [f for f in getattr(extraction, 'filters', []) if str(f).lower() not in ["none", "nessuno", "null"]]
+        
+        # --- NUOVA FORMATTAZIONE ENTITA' PER IL PROMPT ---
+        entities_str = "None"
+        if hasattr(extraction, 'entities') and extraction.entities:
+            entities_str = ", ".join([f"[{e.category}: '{e.value}']" for e in extraction.entities])
+            
+        ext_context = (
+            f"- Intent: {getattr(extraction, 'intent', '')}\n"
+            f"- Entities: {entities_str}\n"
+            f"- Filters: {clean_filters}"
+        )
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", TABLE_SELECTOR_SYSTEM_PROMPT),
-        ("human", "### CONTESTO ESTRATTO (AGENTE 1)\n{ext_context}\n\n### EXECUTION\nQUERY: {query}\nSCHEMA:\n{schema}\n\nOutput:")
+        ("human", "QUERY: {query}\n\n[HINTS FROM AGENT 1]:\n{ext_context}\n\nSCHEMA:\n{schema}")
     ])
     
     structured_llm = llm_reasoning.with_structured_output(TableSelectionResult).with_retry(stop_after_attempt=3)
@@ -76,8 +87,8 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
             "ext_context": ext_context
         })
 
-        print(f"   -> 🧠 Ragionamento: {result.reasoning}")
-        print(f"   -> 📎 Tabelle Scelte (LLM): {result.relevant_tables}")
+        print(f"   -> 🧠 Reasoning: {result.reasoning}")
+        print(f"   -> 📎 Selected Tables (LLM): {result.relevant_tables}")
         
         # 1. base llm selection
         llm_selection = result.relevant_tables
@@ -94,11 +105,11 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
         reasoning_log = result.reasoning
         
         if added_tables:
-            msg_autofix = f"\n🤖 [AUTO-FIX] Il sistema ha aggiunto tabelle ponte mancanti: {list(added_tables)}"
+            msg_autofix = f"\n🤖 [AUTO-FIX] The system has added missing bridge tables: {list(added_tables)}"
             reasoning_log += msg_autofix
             print(msg_autofix)
          
-        log_msg = f"✅ Tabelle Selezionate: {final_selection}\n🤔 Ragionamento: {reasoning_log}"
+        log_msg = f"✅ Selected Tables: {final_selection}\n🤔 Reasoning: {reasoning_log}"
         
         return {
             "selected_tables": final_selection,
@@ -107,4 +118,5 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        return {"error": f"Errore Selector LLM: {str(e)}"}
+        print(f"   ❌ (Table Selector) Errore CRITICO: {str(e)}")
+        return {"error": f"Table Selector LLM Error: {str(e)}", "selected_tables": []}

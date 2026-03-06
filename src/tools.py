@@ -10,10 +10,11 @@ from langchain_chroma import Chroma
 import pickle
 from langchain_classic.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
-from src.models import SearchSchemaInput
+from src.models import SearchSchemaInput, ExtractedEntity
 from src.embedding_factory import get_shared_embedding_function
 from src.utils import get_canonical_name
 from src.config import CHROMA_PATH, COLLECTION_NAME, BM25_PATH, VALUE_COLLECTION_NAME
+from src.models import ExtractedEntity
 
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
 
@@ -73,8 +74,8 @@ def _process_single_doc(doc, schema_map: Dict[str, dict], tables_to_fetch: Set[s
 
 # Hybrid retrieval tool combining semantic search and regex fk expansion
 @tool("search_schema_tool", args_schema=SearchSchemaInput)
-def search_schema_tool(query: str, k: int = 6) -> str: #mettere k = 7 con Llama 70B per evitare di sforare i token 
-    """Ricerca lo schema del database utilizzando ricerca semantica ibrida e foreign keys."""
+def search_schema_tool(query: str, k: int = 10) -> str: #mettere k = 7 con Llama 70B per evitare di sforare i token 
+    """Search the database schema using hybrid semantic search and foreign keys."""
     empty_json = json.dumps([], indent=2)
 
     try:
@@ -122,7 +123,7 @@ def search_schema_tool(query: str, k: int = 6) -> str: #mettere k = 7 con Llama 
             _process_single_doc(doc, final_schema_map, tables_to_fetch_names)
 
         # Phase B: Multi-Hop Expansion fetching neighbors based on Foreign Keys
-        MAX_HOPS = 2
+        MAX_HOPS = 1
         for hop in range(MAX_HOPS):
             missing_tables = tables_to_fetch_names - set(final_schema_map.keys())
             
@@ -161,10 +162,10 @@ def search_schema_tool(query: str, k: int = 6) -> str: #mettere k = 7 con Llama 
         print(f"❌ CRITICAL ERROR IN TOOL: {e}")
         return empty_json
     
-def resolve_entities_in_db(entities: List[str], k: int = 3) -> str:
+def resolve_entities_in_db(entities: List[ExtractedEntity], k: int = 3) -> str:
     """Looks for text entities in the Vector DB of values and returns exact matches."""
     if not entities:
-        return "Nessuna entità testuale trovata."
+        return "No textual entity found."
         
     try:
         vectorstore = Chroma(
@@ -175,19 +176,26 @@ def resolve_entities_in_db(entities: List[str], k: int = 3) -> str:
         
         resolution_hints = []
         for entity in entities:
+            ent_value = entity.value
+            ent_category = entity.category
+            
             # skip words that are too generic or short
-            if len(entity.strip()) < 3:
+            if len(ent_value.strip()) < 2:
                 continue
                 
-            results = vectorstore.similarity_search(entity, k=k)
+            # Facciamo la ricerca semantica usando SOLO il valore (es. "CED")
+            results = vectorstore.similarity_search(ent_value, k=k)
             if results:
-                matches = [f"'{res.page_content}' (da {res.metadata.get('table_name')}.{res.metadata.get('column_name')})" for res in results]
-                resolution_hints.append(f"- Se l'utente cerca '{entity}', usa ESATTAMENTE questi valori reali estratti dal DB: {', '.join(matches)}")
+                matches = [f"'{res.page_content}' (from {res.metadata.get('table_name')}.{res.metadata.get('column_name')})" for res in results]
+                # Aggiungiamo la CATEGORIA all'hint per guidare perfettamente l'Agente SQL
+                resolution_hints.append(
+                    f"- [For the category '{ent_category}']: If the user searches for '{ent_value}', use EXACTLY: {', '.join(matches)}"
+                )
         
         if resolution_hints:
             return "\n".join(resolution_hints)
             
-        return "Nessun match semantico esatto trovato per i valori testuali nel DB."
+        return "No exact semantic matches found for the textual values in the DB."
     except Exception as e:
-        print(f"⚠️ Errore durante il Value Linking semantico: {e}")
-        return "Impossibile recuperare i valori testuali."
+        print(f"⚠️ Error during semantic Value Linking: {e}")
+        return "Unable to retrieve textual values."
