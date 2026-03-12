@@ -84,26 +84,46 @@ def compare_execution_results(db_path: str, golden_sql: str, generated_sql: str)
             conn.close()
 
 def extract_columns_from_sql(sql: str) -> set:
-    """ Estrae in modo preciso i veri nomi di colonna usando l'AST di sqlglot, 
-        ignorando alias di tabella, alias di colonna e stringhe. """
+    """ 
+    Estrae i nomi di colonna in formato 'tabella.colonna' usando l'AST di sqlglot, 
+    risolvendo automaticamente gli alias delle tabelle. 
+    """
     try:
         parsed = sqlglot.parse_one(sql, read="sqlite")
-        # Estrae solo il nome effettivo della colonna (es. da "a.Descrizione" prende "descrizione")
-        columns = set(c.name.lower() for c in parsed.find_all(Column))
-        return columns
-    except Exception:
-        # Fallback con Regex (ora migliorata per ignorare le stringhe tra apici)
-        sql_keywords = {"select", "from", "join", "where", "and", "or", "group", "by", 
-                        "order", "having", "limit", "as", "on", "is", "null", "not", 
-                        "in", "exists", "count", "sum", "avg", "max", "min", "distinct", 
-                        "desc", "asc", "cast", "strftime", "lower", "upper"}
         
-        # Rimuove le stringhe tra apici (es. 'RO')
+        # 1. Costruiamo una mappa per risolvere gli alias (es. {"vi": "valoriinv"})
+        alias_map = {}
+        table_names = []
+        for t in parsed.find_all(Table):
+            t_name = t.name.lower()
+            table_names.append(t_name)
+            alias_map[t_name] = t_name  # Mappa il nome esteso a se stesso
+            if t.alias:
+                alias_map[t.alias.lower()] = t_name
+                
+        # 2. Estraiamo le colonne associandole alla tabella reale
+        columns = set()
+        for c in parsed.find_all(Column):
+            col_name = c.name.lower()
+            if c.table:
+                # Risolve l'alias. Se non lo trova, usa la stringa originale
+                real_table = alias_map.get(c.table.lower(), c.table.lower())
+                columns.add(f"{real_table}.{col_name}")
+            else:
+                # Se la colonna non ha prefisso, ma c'è una sola tabella nella query, la deduciamo
+                if len(set(table_names)) == 1:
+                    columns.add(f"{table_names[0]}.{col_name}")
+                else:
+                    # Ambiguo (manca prefisso e ci sono più tabelle). Teniamo solo il nome
+                    columns.add(col_name)
+        return columns
+        
+    except Exception:
+        # Fallback di sicurezza con Regex se l'AST fallisce
         sql_no_strings = re.sub(r"'.*?'", "", sql.lower())
-        # Rimuove prefissi di tabelle (es. bm.Valore -> Valore)
-        clean_sql = re.sub(r'[a-zA-Z0-9_]+\.', '', sql_no_strings) 
-        words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', clean_sql)
-        return set([w for w in words if w not in sql_keywords])
+        # Cerca pattern specifici tipo "alias.colonna"
+        matches = re.findall(r'\b([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\b', sql_no_strings)
+        return set(f"{t}.{c}" for t, c in matches if t not in ("count", "sum", "avg", "max", "min"))
 
 async def main():
     parser = argparse.ArgumentParser(description="Run Text-to-SQL agent in BATCH mode for Evaluation")
@@ -200,15 +220,19 @@ async def main():
                 
                 # 3. Schema Linking Metrics (Column Selector)
                 # Appiattiamo tutte le colonne scelte in un set
-                selected_cols_flat = set(col.lower() for cols in selected_cols_dict.values() for col in cols)
-                golden_cols_raw = extract_columns_from_sql(golden_sql)
+                selected_cols_fq = set()
+                for t_name, cols in selected_cols_dict.items():
+                    t_name_lower = t_name.lower()
+                    for col in cols:
+                        selected_cols_fq.add(f"{t_name_lower}.{col.lower()}")
                 
-                # FIX: Rimuoviamo i nomi delle tabelle estratti per sbaglio dalla Golden
-                golden_cols = golden_cols_raw - golden_tables_lower
+                # Estraiamo le colonne fully-qualified dalla query attesa (Golden SQL)
+                golden_cols_fq = extract_columns_from_sql(golden_sql)
                 
-                col_true_positives = len(golden_cols.intersection(selected_cols_flat))
-                col_recall = col_true_positives / len(golden_cols) if golden_cols else 0.0
-                col_precision = col_true_positives / len(selected_cols_flat) if selected_cols_flat else 0.0
+                # Calcolo delle vere metriche
+                col_true_positives = len(golden_cols_fq.intersection(selected_cols_fq))
+                col_recall = col_true_positives / len(golden_cols_fq) if golden_cols_fq else 0.0
+                col_precision = col_true_positives / len(selected_cols_fq) if selected_cols_fq else 0.0
 
                 result_record = {
                     "id": q_id,
@@ -233,10 +257,9 @@ async def main():
                 print(f"      - Scelte (Agent 2): {list(selected_tables)}")
                 
                 print(f"   🏷️  COLONNE:")
-                print(f"      - Attese (Golden): {list(golden_cols)}")
+                print(f"      - Attese (Golden): {list(golden_cols_fq)}")
                 # Mostriamo le colonne raggruppate per tabella per leggibilità
-                col_info = ", ".join([f"{t}: {cols}" for t, cols in selected_cols_dict.items()])
-                print(f"      - Scelte (Agent 2.5): {col_info}")
+                print(f"      - Scelte (Agent 2.5): {list(selected_cols_fq)}")
                 print(f"   --------------------------------------------------")
                 
                 status_icon = "🏆" if ex_match else ("✅" if execution_status else "❌")
