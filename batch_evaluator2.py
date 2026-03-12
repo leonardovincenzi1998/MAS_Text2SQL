@@ -1,10 +1,13 @@
 import argparse
 import asyncio
 import os
+import sqlglot
 import json
 import re
 import warnings
 import sqlite3
+import gc
+from sqlglot.expressions import Table, Column
 
 # Disabilita i warning di pydantic per un log più pulito
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
@@ -38,10 +41,15 @@ def parse_golden_set(filepath: str) -> list:
     return parsed_data
 
 def extract_tables_from_sql(sql: str) -> set:
-    """ Estrae rozzamente i nomi delle tabelle usate in una query SQL. """
-    sql_clean = sql.replace('\n', ' ')
-    tables = re.findall(r'(?:FROM|JOIN)\s+([a-zA-Z0-9_]+)', sql_clean, re.IGNORECASE)
-    return set([t.lower() for t in tables])
+    """ Estrae in modo preciso i nomi delle tabelle usando l'AST di sqlglot. """
+    try:
+        parsed = sqlglot.parse_one(sql, read="sqlite")
+        return set(t.name.lower() for t in parsed.find_all(Table))
+    except Exception:
+        # Fallback di sicurezza con Regex se il parser fallisce per sintassi strana
+        sql_clean = sql.replace('\n', ' ')
+        tables = re.findall(r'(?:FROM|JOIN)\s+([a-zA-Z0-9_]+)', sql_clean, re.IGNORECASE)
+        return set([t.lower() for t in tables])
 
 def compare_execution_results(db_path: str, golden_sql: str, generated_sql: str) -> bool:
     """
@@ -76,17 +84,26 @@ def compare_execution_results(db_path: str, golden_sql: str, generated_sql: str)
             conn.close()
 
 def extract_columns_from_sql(sql: str) -> set:
-    """ Estrae i nomi delle potenziali colonne dalla Golden SQL """
-    sql_keywords = {"select", "from", "join", "where", "and", "or", "group", "by", 
-                    "order", "having", "limit", "as", "on", "is", "null", "not", 
-                    "in", "exists", "count", "sum", "avg", "max", "min", "distinct", 
-                    "desc", "asc", "cast", "strftime", "lower", "upper"}
-    
-    # Rimuove la punteggiatura e i prefissi delle tabelle (es. "bm.Valore" -> "Valore")
-    clean_sql = re.sub(r'[a-zA-Z0-9_]+\.', '', sql.lower()) 
-    words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', clean_sql)
-    
-    return set([w for w in words if w not in sql_keywords])
+    """ Estrae in modo preciso i veri nomi di colonna usando l'AST di sqlglot, 
+        ignorando alias di tabella, alias di colonna e stringhe. """
+    try:
+        parsed = sqlglot.parse_one(sql, read="sqlite")
+        # Estrae solo il nome effettivo della colonna (es. da "a.Descrizione" prende "descrizione")
+        columns = set(c.name.lower() for c in parsed.find_all(Column))
+        return columns
+    except Exception:
+        # Fallback con Regex (ora migliorata per ignorare le stringhe tra apici)
+        sql_keywords = {"select", "from", "join", "where", "and", "or", "group", "by", 
+                        "order", "having", "limit", "as", "on", "is", "null", "not", 
+                        "in", "exists", "count", "sum", "avg", "max", "min", "distinct", 
+                        "desc", "asc", "cast", "strftime", "lower", "upper"}
+        
+        # Rimuove le stringhe tra apici (es. 'RO')
+        sql_no_strings = re.sub(r"'.*?'", "", sql.lower())
+        # Rimuove prefissi di tabelle (es. bm.Valore -> Valore)
+        clean_sql = re.sub(r'[a-zA-Z0-9_]+\.', '', sql_no_strings) 
+        words = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', clean_sql)
+        return set([w for w in words if w not in sql_keywords])
 
 async def main():
     parser = argparse.ArgumentParser(description="Run Text-to-SQL agent in BATCH mode for Evaluation")
@@ -117,14 +134,14 @@ async def main():
         
         print(f"▶️ [{q_id}/{len(eval_dataset)}] '{user_query}'")
         
-        initial_state = {
-            "messages": [HumanMessage(content=user_query)],
-            "user_query": user_query,
-            "db_path": args.db,
-            "selected_tables": [],
-            "error": None,
-            "retry_count": 0
-        }
+        # initial_state = {
+        #     "messages": [HumanMessage(content=user_query)],
+        #     "user_query": user_query,
+        #     "db_path": args.db,
+        #     "selected_tables": [],
+        #     "error": None,
+        #     "retry_count": 0
+        # }
 
         max_domanda_retries = 2
         
@@ -141,7 +158,7 @@ async def main():
                     }
                 
                 # Timeout globale di 4 minuti (240 secondi) per evitare blocchi infiniti
-                final_state = await asyncio.wait_for(app.ainvoke(initial_state), timeout=240.0)
+                final_state = await asyncio.wait_for(app.ainvoke(current_state), timeout=240.0)
                 
                 errore_fatale = final_state.get("error") or final_state.get("error_traceback")
                 esecuzione_ok = final_state.get("execution_status")
@@ -173,16 +190,21 @@ async def main():
                 
                 # 2. Schema Linking Metrics (Table Selector)
                 golden_tables = extract_tables_from_sql(golden_sql)
+                golden_tables_lower = set([t.lower() for t in golden_tables])
+
                 selected_tables_lower = set([t.lower() for t in selected_tables])
                 
-                true_positives = len(golden_tables.intersection(selected_tables_lower))
+                true_positives = len(golden_tables_lower.intersection(selected_tables_lower))
                 table_recall = true_positives / len(golden_tables) if golden_tables else 0.0
                 table_precision = true_positives / len(selected_tables_lower) if selected_tables_lower else 0.0
                 
                 # 3. Schema Linking Metrics (Column Selector)
                 # Appiattiamo tutte le colonne scelte in un set
                 selected_cols_flat = set(col.lower() for cols in selected_cols_dict.values() for col in cols)
-                golden_cols = extract_columns_from_sql(golden_sql)
+                golden_cols_raw = extract_columns_from_sql(golden_sql)
+                
+                # FIX: Rimuoviamo i nomi delle tabelle estratti per sbaglio dalla Golden
+                golden_cols = golden_cols_raw - golden_tables_lower
                 
                 col_true_positives = len(golden_cols.intersection(selected_cols_flat))
                 col_recall = col_true_positives / len(golden_cols) if golden_cols else 0.0
@@ -204,6 +226,18 @@ async def main():
                     "error": final_state.get("error_traceback") or final_state.get("error")
                 }
                 results.append(result_record)
+                
+                print(f"\n   📊 [DETTAGLIO SCHEMA LINKING]")
+                print(f"   📂 TABELLE:")
+                print(f"      - Attese (Golden): {list(golden_tables)}")
+                print(f"      - Scelte (Agent 2): {list(selected_tables)}")
+                
+                print(f"   🏷️  COLONNE:")
+                print(f"      - Attese (Golden): {list(golden_cols)}")
+                # Mostriamo le colonne raggruppate per tabella per leggibilità
+                col_info = ", ".join([f"{t}: {cols}" for t, cols in selected_cols_dict.items()])
+                print(f"      - Scelte (Agent 2.5): {col_info}")
+                print(f"   --------------------------------------------------")
                 
                 status_icon = "🏆" if ex_match else ("✅" if execution_status else "❌")
                 print(f"   {status_icon} Sintassi: {execution_status} | EX-Match: {ex_match}")
@@ -232,6 +266,10 @@ async def main():
                     print(f"   ❌ Eccezione definitiva: {e}")
                     results.append({"id": q_id, "ex_match": False, "execution_status": False, "error": str(e), "retry_count": 0})
                     break
+
+        print("   🧘‍♂️ Pausa di 5 secondi per pulizia cache e raffreddamento GPU...")
+        gc.collect() 
+        await asyncio.sleep(5.0)
 
     # Salvataggio e Report Finale
     with open(args.output, "w", encoding="utf-8") as f:
