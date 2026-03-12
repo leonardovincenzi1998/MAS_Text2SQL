@@ -531,17 +531,34 @@ async def main():
     print("📚 Costruzione indice lessicale BM25 per i valori (Value Linking)...")
 
     try:
-
-        # Recupera tutti i valori salvati in ChromaDB
-        all_val_data = value_collection.get()
         val_docs_for_bm25 = []
+        offset = 0
+        batch_size = 5000  # Dimensione sicura per evitare l'errore SQLite
         
-        for doc_text, meta in zip(all_val_data['documents'], all_val_data['metadatas']):
-            val_docs_for_bm25.append(Document(page_content=doc_text, metadata=meta))
+        # Estrazione a blocchi (Pagination)
+        while True:
+            # Recupera un batch di dati usando limit e offset
+            batch_data = value_collection.get(limit=batch_size, offset=offset)
             
+            docs = batch_data.get('documents', [])
+            metas = batch_data.get('metadatas', [])
+            
+            if not docs:
+                break  # Nessun altro documento da recuperare, usciamo dal ciclo
+                
+            for doc_text, meta in zip(docs, metas):
+                val_docs_for_bm25.append(Document(page_content=doc_text, metadata=meta))
+                
+            offset += batch_size
+
+        print(f"   📥 Recuperati con successo {len(val_docs_for_bm25)} valori per l'indice BM25.")
+
+        # --- PARTE CHE MANCAVA (Creazione e Salvataggio) ---
         if val_docs_for_bm25:
+            # Addestra l'algoritmo BM25 sui documenti testuali estratti
             bm25_val_retriever = BM25Retriever.from_documents(val_docs_for_bm25)
             
+            # Salva il modello su disco
             with open(BM25_VALUES_PATH, 'wb') as f:
                 pickle.dump(bm25_val_retriever, f)
             print("✅ Indice BM25 dei valori completato e salvato su disco.")

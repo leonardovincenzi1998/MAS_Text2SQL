@@ -72,10 +72,11 @@ Tabelle Necessarie: CdGCdC (Centri di Gestione/Costo), MobiliCdGCdC
 
 Colonne Necessarie: CdGCdC.IdCdGCdC, CdGCdC.Codice, MobiliCdGCdC.IdCdGCdC, MobiliCdGCdC.IdBeneMobile, MobiliCdGCdC.IsUltimo
 
-SELECT COUNT(m.IdBeneMobile) AS NumeroBeni
-FROM CdGCdC c
-JOIN MobiliCdGCdC m ON c.IdCdGCdC = m.IdCdGCdC
-WHERE c.Codice = 'CED' AND m.IsUltimo = 1;
+SELECT COUNT(bm.IdBeneMobile) AS NumeroBeni
+FROM BeniMobili bm
+JOIN MobiliCdGCdC m ON bm.IdBeneMobile = m.IdBeneMobile
+JOIN CdGCdC c ON m.IdCdGCdC = c.IdCdGCdC
+WHERE c.Codice = 'CED' AND m.IsUltimo = 1 AND bm.isEliminato = 0;
 
 ------------Domanda 6 (Medium)
 
@@ -413,3 +414,11 @@ JOIN Edifici e ON l.IdEdificio = e.IdEdificio
 WHERE ml.IsUltimo = 1
 ORDER BY bm.Valore DESC
 LIMIT 1;
+
+
+28. "Mostra la descrizione dei beni mobili che appartengono alla sotto-specie con il prezzo base più alto in assoluto, includendo anche il nome di tale sotto-specie."
+//OK, NESTED QUERY MAX
+SELECT bm.Descrizione, ss.Denominazione
+FROM BeniMobili bm
+JOIN SottoSpeci ss ON bm.IdSottoSpecie = ss.IdSottoSpecie
+WHERE ss.Prezzo = (SELECT MAX(Prezzo) FROM SottoSpeci);

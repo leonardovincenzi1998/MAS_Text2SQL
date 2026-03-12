@@ -69,29 +69,14 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         extracted_info = (
             f"Intent: {extraction.intent}\n"
             f"Entities: {entities_str}\n"
-            f"Operations: {extraction.operations}\n"
             f"Filters: {extraction.filters}"
         )
 
     entity_hints = state.get("entity_hints", "Nessun hint disponibile sui valori testuali.")
 
-    # retrieve graph/table selector reasoning from agent 2 to guide joins
-    messages = state.get("messages", [])
-    agent2_reasoning = "No table selection reasoning available."
-    agent25_reasoning = "No column selection reasoning available."
-
-    for msg in messages:
-        content = msg.content if hasattr(msg, 'content') else str(msg)
-        if "Tables Selected:" in content:
-            agent2_reasoning = content
-        elif "Columns Selected:" in content:
-            agent25_reasoning = content
-            
-    combined_reasoning = f"--- JOIN REASONING (Agente 2) ---\n{agent2_reasoning}\n\n--- COLUMN & FILTER REASONING (Agente 2.5) ---\n{agent25_reasoning}"
-
     prompt = ChatPromptTemplate.from_messages([
         ("system", SQL_GENERATOR_SYSTEM_PROMPT),
-        ("human", "### CONTEXT\n[ENRICHED DDL SCHEMA]\n{ddl_context}\n\n[EXTRACTED INFO]\n{extracted_info}\n\n[JOIN LOGIC SUGGESTIONS]\n{reasoning}\n\n### USER QUESTION\n{query}\n\nOutput:")
+        ("human", "### CONTEXT\n[ENRICHED DDL SCHEMA]\n{ddl_context}\n\n[EXTRACTED INFO]\n{extracted_info}\n\n[EXACT VALUE HINTS FROM VECTOR DB]\n{entity_hints}\n\n### USER QUESTION\n{query}\n\nOutput:")
     ])
     
     chain = prompt | llm_sql
@@ -100,7 +85,6 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         response = await chain.ainvoke({
             "ddl_context": ddl_context,
             "extracted_info": extracted_info,
-            "reasoning": combined_reasoning,
             "entity_hints": entity_hints,
             "query": state["user_query"]
         })

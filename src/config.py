@@ -16,7 +16,7 @@ API_KEY = os.getenv("API_KEY", 'EMPTY')
 COLLECTION_NAME = "langchain"
 VALUE_COLLECTION_NAME = "db_values"
 BM25_PATH = os.getenv("BM25_PATH", os.path.join(BASE_DIR, "bm25_index.pkl"))
-BM25_VALUES_PATH = os.getenv("BM25_VALUES_PATH", os.path.join(BASE_DIR, "vector_db/bm25_values_index.pkl"))
+BM25_VALUES_PATH = os.getenv("BM25_VALUES_PATH", os.path.join(BASE_DIR, "bm25_values_index.pkl"))
 
 # Embeddings Configuration
 DEFAULT_LOCAL_MODEL_PATH = "/scratch.hpc/leonardo.vincenzi/mas_text2sql/local_models/bge-m3"
@@ -39,8 +39,8 @@ llm_extractor = ChatOpenAI(
     openai_api_key=API_KEY,
     temperature=0.1,
     max_tokens=1500,
-    #presence_penalty=0.3,
-    frequency_penalty=0.8
+    presence_penalty=0,
+    frequency_penalty=0
 )
 
 
@@ -51,9 +51,9 @@ llm_reasoning = ChatOpenAI(
     openai_api_base=BASE_URL,
     openai_api_key=API_KEY,
     temperature=0.1,
-    max_tokens=2000,
-    #presence_penalty=0.3,
-    #frequency_penalty=0.3
+    max_tokens=800,
+    presence_penalty=0.0,
+    frequency_penalty=0.0
 )
 
 # # 2. LLM for Agent 3 (SQL Generation)
@@ -62,8 +62,10 @@ llm_sql = ChatOpenAI(
     model=LLM_MODEL_NAME,
     openai_api_base=BASE_URL,
     openai_api_key=API_KEY,
-    temperature=0.1
-    #max_tokens=1000
+    temperature=0.0,
+    max_tokens=1500,
+    presence_penalty=0.0,
+    frequency_penalty=0.0
 )
 
 

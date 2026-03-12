@@ -30,7 +30,7 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     # schema retrieval via chromadb tool
     try:
         # retrieve generous number of tables to provide context
-        schema_json = search_schema_tool.invoke({"query": vector_search_query, "k": 10}) #mettere k = 7 con Llama 70B per evitare di sforare i token 
+        schema_json = search_schema_tool.invoke({"query": vector_search_query, "k": 10}) 
     except Exception as e:
         return {"error": f"Chroma error: {str(e)}"}
     
@@ -41,7 +41,7 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
         candidate_tables = [t.get("table_name") or t.get("table") for t in schema_list if t.get("table_name") or t.get("table")]
         print(f"📦 (Table Selector) Candidate tables passate all'Agente 2: {len(candidate_tables)}")
         
-        schema_markdown = format_schema_for_llm(schema_list)
+        schema_markdown = format_schema_for_llm(schema_list, include_samples=False)
         
         # save markdown payload for debugging
         with open("debug_schema_markdown.md", "w", encoding="utf-8") as f:
@@ -59,7 +59,6 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
 
     ext_context = "No extraction provided."
     if extraction:
-        clean_filters = [f for f in getattr(extraction, 'filters', []) if str(f).lower() not in ["none", "nessuno", "null"]]
         
         # --- NUOVA FORMATTAZIONE ENTITA' PER IL PROMPT ---
         entities_str = "None"
@@ -69,7 +68,6 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
         ext_context = (
             f"- Intent: {getattr(extraction, 'intent', '')}\n"
             f"- Entities: {entities_str}\n"
-            f"- Filters: {clean_filters}"
         )
     
     prompt = ChatPromptTemplate.from_messages([
@@ -87,7 +85,6 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
             "ext_context": ext_context
         })
 
-        print(f"   -> 🧠 Reasoning: {result.reasoning}")
         print(f"   -> 📎 Selected Tables (LLM): {result.relevant_tables}")
         
         # 1. base llm selection
@@ -102,14 +99,13 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
         
         # 3. calculate additions for debugging
         added_tables = set(final_selection) - set(llm_selection)
-        reasoning_log = result.reasoning
         
         if added_tables:
             msg_autofix = f"\n🤖 [AUTO-FIX] The system has added missing bridge tables: {list(added_tables)}"
-            reasoning_log += msg_autofix
+            log_msg += msg_autofix
             print(msg_autofix)
          
-        log_msg = f"✅ Selected Tables: {final_selection}\n🤔 Reasoning: {reasoning_log}"
+        log_msg = f"✅ Selected Tables: {final_selection}\n"
         
         return {
             "selected_tables": final_selection,

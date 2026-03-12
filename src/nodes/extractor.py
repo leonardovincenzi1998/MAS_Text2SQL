@@ -20,8 +20,8 @@ async def run_entity_extractor(state: AgentState) -> Dict[str, Any]:
         extraction: ExtractionResult = await chain.ainvoke({"input": state['user_query']})
         
         # safely handle empty lists
-        ops = extraction.operations if extraction.operations else ["None"]
         filtri = extraction.filters if extraction.filters else ["None"]
+        chiavi_ricerca = extraction.search_keywords if hasattr(extraction, 'search_keywords') and extraction.search_keywords else ["None"]
         ragionamento_str = " ".join(extraction.reasoning_steps) if extraction.reasoning_steps else "Nessuno"
 
         if extraction.entities:
@@ -33,7 +33,7 @@ async def run_entity_extractor(state: AgentState) -> Dict[str, Any]:
         print(f"   -> 🧠 Reasoning: {ragionamento_str}")
         print(f"   -> 🎯 Intent: {extraction.intent}")
         print(f"   -> 🔑 Entities: {entita_formattate}") 
-        print(f"   -> ⚙️ Operations: {ops}")
+        print(f"   -> 🔎 Search Keywords: {chiavi_ricerca}")
         print(f"   -> 🗂️ Filters: {filtri}")
         
         return {

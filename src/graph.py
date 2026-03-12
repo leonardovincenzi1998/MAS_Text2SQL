@@ -11,6 +11,14 @@ from src.nodes.value_linker import run_value_linker
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
+def check_extractor_error(state: AgentState) -> str:
+    """Interrompe il grafo se l'Entity Extractor fallisce criticamente."""
+    if state.get("error"):
+        print("🛑 (Router) Errore critico rilevato in estrazione. Interruzione grafo.")
+        return "end"
+    return "continue"
+
+
 # conditional routing function
 def routing_decision(state: AgentState) -> str:
     """Decide whether to end or invoke the Critic agent based on the results of the Sandbox."""
@@ -45,7 +53,14 @@ def create_workflow() -> StateGraph:
 
     # define the initial execution flow
     workflow.set_entry_point("entity_extractor")
-    workflow.add_edge("entity_extractor", "value_linker")
+    workflow.add_conditional_edges(
+        "entity_extractor",
+        check_extractor_error,
+        {
+            "end": END,
+            "continue": "value_linker"
+        }
+    )
     workflow.add_edge("value_linker", "table_selector")
     workflow.add_edge("table_selector", "column_selector")
     workflow.add_edge("column_selector", "sql_generator")

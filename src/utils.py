@@ -150,9 +150,10 @@ def expand_selection_with_graph(
     return final_real_names
 
 # transforms the json schema into an optimized pseudo-markdown format for the llm
-def format_schema_for_llm(schema_list: list, selected_columns: Optional[Dict[str, List[str]]] = None) -> str:
+def format_schema_for_llm(schema_list: list, selected_columns: Optional[Dict[str, List[str]]] = None, include_samples: bool = True) -> str:
     """
     Generate the Markdown by reading the pre-calculated strings, applying only the column filter.
+    If include_samples is False, dynamically hides Categorical Values and Samples to avoid context bloat.
     """
     formatted_tables = []
     
@@ -161,7 +162,6 @@ def format_schema_for_llm(schema_list: list, selected_columns: Optional[Dict[str
         desc = tbl.get("description", tbl.get("desc", ""))
         cat_vals = tbl.get("categorical_values", "")
         
-        # retrieve the pre-calculated cache and raw columns
         formatted_cols_dict = tbl.get("formatted_columns_dict", {})
         raw_columns = tbl.get("columns", [])
         
@@ -173,17 +173,24 @@ def format_schema_for_llm(schema_list: list, selected_columns: Optional[Dict[str
         else:
             cols_to_keep = raw_columns
 
-        # directly retrieve the string enriched by the dictionary
-        col_tuples = [formatted_cols_dict.get(col, col) for col in cols_to_keep]
+        # Estrae le stringhe. Se include_samples è False, rimuove il pezzo "(Esempi: ...)"
+        col_tuples = []
+        for col in cols_to_keep:
+            c_str = formatted_cols_dict.get(col, col)
+            if not include_samples:
+                # Taglia via dinamicamente la stringa degli esempi se presente
+                c_str = c_str.split(" (Esempi:")[0]
+            col_tuples.append(c_str)
             
-        # pseudo-markdown construction
         tbl_md = f"### Table: {name}\n"
         
         if desc and desc.strip() and desc != "Unknown": 
             tbl_md += f"Description: {desc}\n"
             
         tbl_md += f"Columns: ( {', '.join(col_tuples)} )\n"
-        if cat_vals: 
+        
+        # Inserisce le Notable Values solo se consentito
+        if include_samples and cat_vals: 
             tbl_md += f"Notable Values:\n{cat_vals}\n"
             
         formatted_tables.append(tbl_md)
@@ -356,7 +363,6 @@ def get_schema_with_formatted_columns(schema_list: List[Dict[str, Any]]) -> List
             if col in samples and samples[col]:
                 safe_samples = [str(s).replace('\n', ' ').replace('\r', '') for s in samples[col]]
                 col_str += f" (Esempi: {', '.join(safe_samples)})"
-            
             formatted_cols[col] = col_str
             
         # 3. inject the cache directly into the table metadata

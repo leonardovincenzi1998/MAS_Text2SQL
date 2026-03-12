@@ -103,14 +103,20 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
     
     # --- CORREZIONE FORMATTAZIONE ENTITA' PER IL CRITIC ---
     extraction = state.get("extraction_result")
+    entity_hints = state.get("entity_hints", "Nessun hint disponibile.") # RECUPERA GLI HINTS
+    
     extracted_info = "No extraction available."
     if extraction:
         entities_str = "None"
         if hasattr(extraction, 'entities') and extraction.entities:
             entities_str = ", ".join([f"[{e.category}: '{e.value}']" for e in extraction.entities])
             
-        extracted_info = f"Entities: {entities_str} | Filters: {getattr(extraction, 'filters', [])}"
-
+        # INIETTA GLI HINTS NELL'INFO PER IL CRITIC
+        extracted_info = (
+            f"Entities: {entities_str}\n"
+            f"Filters: {getattr(extraction, 'filters', [])}\n"
+            f"EXACT VALUE HINTS: {entity_hints}" 
+        )
     # 3. prompt formatting
     prompt = QUERY_CRITIC_PROMPT.format(
         user_query=user_query,
@@ -128,8 +134,8 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
     try:
         response: CriticResult = await structured_llm.ainvoke(messages)
         
-        print(f"   💡 (Critic Plan): {response.correction_plan}")
-        print(f"   🔧 (New SQL): {response.corrected_sql}")
+        print(f" 💡 (Critic Plan): {response.correction_plan}")
+        print(f" 🔧 (New SQL): {response.corrected_sql}")
         
         # 4. update the status
         return {

@@ -69,29 +69,29 @@ else
 fi
 echo "✅ Server vLLM pronto e in ascolto!"
 
-echo ""
-echo "🧹 Pulizia del vecchio Vector DB e degli indici BM25..."
-rm -rf "$CHROMA_PATH"
-rm -f "bm25_index.pkl"
-rm -f "bm25_values_index.pkl"
+# echo ""
+# echo "🧹 Pulizia del vecchio Vector DB e degli indici BM25..."
+# rm -rf "$CHROMA_PATH"
+# rm -f "bm25_index.pkl"
+# rm -f "bm25_values_index.pkl"
 
-echo "⚙️ Avvio Ingestion (1 tabella alla volta per evitare Timeout)..."
-export INGEST_MAX_CONCURRENCY=1
-python3 ingest_vector.py --db_path "$DB_PATH" --chroma_path "$CHROMA_PATH"
+# echo "⚙️ Avvio Ingestion (1 tabella alla volta per evitare Timeout)..."
+# export INGEST_MAX_CONCURRENCY=1
+# python3 ingest_vector.py --db_path "$DB_PATH" --chroma_path "$CHROMA_PATH"
 
-if [ $? -ne 0 ]; then
-    echo "❌ Errore critico durante l'ingestion. Interrompo la valutazione."
-    pkill -f "vllm.entrypoints.openai.api_server"
-    exit 1
-fi
-echo "✅ Ingestion completata con successo!"
+# if [ $? -ne 0 ]; then
+#     echo "❌ Errore critico durante l'ingestion. Interrompo la valutazione."
+#     pkill -f "vllm.entrypoints.openai.api_server"
+#     exit 1
+# fi
+# echo "✅ Ingestion completata con successo!"
 
 # 4. Esecuzione dello script Python di Batch Evaluation
 echo ""
 echo "🤖 Avvio script di valutazione automatica..."
 echo "--------------------------------------------------"
 
-python3 batch_evaluator2.py --db "$DB_PATH" --golden_set set_domande.txt --output metriche_modello_32b.json
+python3 batch_evaluator2.py --db "$DB_PATH" --golden_set set_domande.txt --output_json metriche_modello_32b.json
 
 # 5. Spegnimento e Cleanup automatico
 echo ""

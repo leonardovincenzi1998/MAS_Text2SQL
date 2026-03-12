@@ -81,34 +81,34 @@ async def main():
             else:
                 print("🚀 ESTRAZIONE E SELEZIONE COMPLETATA\n")
 
-                # agent 1: extraction stats
-                extraction = final_state.get("extraction_result")
-                if extraction:
-                    print(f"📋 [Agente 1] Intento:     {getattr(extraction, 'intent', 'N/A')}")
-                    print(f"🔑 [Agente 1] Entità:      {getattr(extraction, 'entities', [])}")
-                    print(f"⚙️  [Agente 1] Operazioni:  {getattr(extraction, 'operations', [])}")
+            # agent 1: extraction stats
+            extraction = final_state.get("extraction_result")
+            if extraction:
+                print(f"📋 [Agente 1] Intento:     {getattr(extraction, 'intent', 'N/A')}")
+                print(f"🔑 [Agente 1] Entità:      {getattr(extraction, 'entities', [])}")
+                print(f"🗂️ [Agente 1] Filtri:      {getattr(extraction, 'filters', [])}")
+                print(f"🔎 [Agente 1] Search Keywords: {getattr(extraction, 'search_keywords', [])}")
+            # vector db stats
+            print("\n📚 [Vector DB] Schema Recuperato:")
+            if final_state.get("parsed_schema"):
+                schema_len = len(str(final_state['parsed_schema']))
+                print(f"   (JSON Schema trovato, lunghezza stimata: {schema_len} caratteri)")
+            else:
+                print("   Nessuno schema trovato.")
 
-                # vector db stats
-                print("\n📚 [Vector DB] Schema Recuperato:")
-                if final_state.get("parsed_schema"):
-                    schema_len = len(str(final_state['parsed_schema']))
-                    print(f"   (JSON Schema trovato, lunghezza stimata: {schema_len} caratteri)")
-                else:
-                    print("   Nessuno schema trovato.")
+            # final reasoning log in ordine cronologico (Agente 2 -> Agente 2.5)
+            messages = final_state.get("messages", [])
+            for msg in messages:
+                content = msg.content if hasattr(msg, 'content') else str(msg)
+                if "✅ Selected Tables:" in content:
+                    print(f"\n🧠 [Ragionamento Agente 2 - Table Selector]:\n{content}")
+                elif "✅ Selected Columns:" in content:
+                    print(f"\n🧠 [Ragionamento Agente 2.5 - Column Selector]:\n{content}")
 
-                # final reasoning log in ordine cronologico (Agente 2 -> Agente 2.5)
-                messages = final_state.get("messages", [])
-                for msg in messages:
-                    content = msg.content if hasattr(msg, 'content') else str(msg)
-                    if "✅ Selected Tables:" in content:
-                        print(f"\n🧠 [Ragionamento Agente 2 - Table Selector]:\n{content}")
-                    elif "✅ Selected Columns:" in content:
-                        print(f"\n🧠 [Ragionamento Agente 2.5 - Column Selector]:\n{content}")
-
-                # agent 3: sql generation
-                if final_state.get("generated_sql"):
-                    print(f"\n✍️  [Agente 3] SQL GENERATO:")
-                    print(final_state["generated_sql"])
+            # agent 3: sql generation
+            if final_state.get("generated_sql"):
+                print(f"\n✍️  [Agente 3] SQL GENERATO:")
+                print(final_state["generated_sql"])
 
             print("-" * 50)
             print("\n" + "x" * 50 + "\n")

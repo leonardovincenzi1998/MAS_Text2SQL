@@ -21,7 +21,6 @@ class ExtractionResult(BaseModel):
         description="List of key entities extracted, categorised by type."
     )
     search_keywords: List[str] = Field(default_factory=list, description="SEO-like keywords optimized for DB search (includes singular/plural forms and synonyms).")
-    operations: List[str] = Field(default_factory=list, description="List of exact SQLite clauses and aggregate functions required (e.g., 'SELECT', 'WHERE', 'COUNT', 'AVG', 'GROUP BY', 'ORDER BY', 'LIMIT', 'DISTINCT').")
     filters: List[str] = Field(default_factory=list, description="Specific conditions requested by the user IN NATURAL LANGUAGE, e.g., 'Il bene deve essere attivo'. DO NOT use SQL syntax.")
 
 class SearchSchemaInput(BaseModel):
@@ -30,13 +29,11 @@ class SearchSchemaInput(BaseModel):
     
 # Structured output for the table selection agent
 class TableSelectionResult(BaseModel):
-    reasoning: str = Field(description="EXTREMELY SHORT logical explanation (max 3 sentences) specifying which tables are necessary for the query.")
     central_entity: str = Field(description="The main table that the query revolves around (e.g., 'BeniMobili').")
     relevant_tables: List[str] = Field(default_factory=list, description="Exact list of selected table names including bridge tables.")
 
 # Structured output for the column selection agent (Agent 2.5)
 class ColumnSelectionResult(BaseModel):
-    reasoning: str = Field(description="EXTREMELY SHORT explanation [max of 3 sentences] of why these columns were chosen for filters, JOINs or SELECTs.")
     table_columns: Dict[str, List[str]] = Field(description="Dictionary with exact “table_name” as key and list of exact “column_names” as value.")
     
 # Represents the state of the LangGraph multi-agent workflow
