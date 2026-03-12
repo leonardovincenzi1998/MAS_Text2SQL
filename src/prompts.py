@@ -34,15 +34,16 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 - LANGUAGE FOR ENTITIES/INTENT: Italian (must match the Database schema).
 - NO CONVERSATIONAL FILLERS: Do not say "Here is the result" or "Sure".
 - THINK STEP BY STEP BUT BE CONCISE: Focus on understanding the request. Keep your "reasoning_steps" extremely short (maximum 3 sentences in the list). Do not over-explain.
+- FOR BM25 OPTIMIZATION: Ensure that the 'entities' value matches the exact string from the user input (normalized to singular) to allow the Value Linker to find identical records.
 
 ### EXTRACTION LOGIC & HIERARCHY
 1. **Intent Extraction**: Define the primary goal in Italian.
 
 2. **Entity & Attribute Mapping (KEY-VALUE FORMAT)**:
    - Identify textual entities and format them as `{{"category": "...", "value": "..."}}`.
-   - GOLDEN RULE: NEVER include status adjectives (e.g. 'active', 'deleted', "new", 'recent') or numbers/dates in the "entities" list. 'Entities' are ONLY used for exact text searches (e.g. names of places, types of assets, codes).
-   - GROUPING RULE: Do NOT extract generic grouping terms (e.g., 'Area', 'Edificio', 'Categoria', 'Locale') as entities when the user asks "per ogni..." or "raggruppato per...". Only extract specific explicit values (e.g., 'Roma', 'CED', 'Armadio', 'TERRITORIO COMUNALE').
-   - Enter status conditions EXCLUSIVELY in the "filters" list.
+   - GOLDEN RULE: NEVER include Boolean status adjectives (e.g., 'attivo', 'eliminato', 'nuovo', 'da eliminare') or numbers/dates in the "entities" list. However, DO extract Categorical textual statuses if they represent specific domain classifications (e.g., 'BUONO', 'FUORI USO', 'INDISPONIBILE', 'DI SERIE') since these require exact text matching.
+   - GROUPING RULE: Do NOT extract generic grouping terms (e.g., 'Area', 'Edificio', 'Categoria', 'Locale') as entities when the user asks "per ogni..." or "raggruppato per...". Only extract specific explicit values (e.g., 'Roma', 'CED', 'Armadio', 'SCUOLA ELEMENTARE').
+   - Enter Boolean status conditions EXCLUSIVELY in the "filters" list.
 
 3. **Search Keywords Generation**:
    - For every entity identified, generate root keywords optimized for a Semantic Search Engine. Break down multi-word entities. ALWAYS include both singular and plural forms (e.g., "Area", "Aree", "Locale", "Locali").
@@ -61,71 +62,70 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 ### JSON SCHEMA
 {{
   "reasoning_steps": [
-    "The user wants to find the 'Scuola Elementare' building with the maximum number of 'beni mobili'.",
-    "Added 'attivi' as a semantic filter. Extracted 'Scuola Elementare' and 'beni mobili' as entities for the vector search."
+    "Brief explanation of the user's intent.",
+    "Justification for extracting specific terms as entities (remembering to normalize them to singular).",
+    "Reasoning for assigning statuses and logical conditions to the filters list."
   ],
-  "intent": "Ricerca edificio con il massimo numero di beni mobili attivi",
+  "intent": "Short and clear description of the goal in Italian",
   "entities": [
-    {{"category": "TipoBene", "value": "beni mobili"}},
-    {{"category": "Edificio", "value": "Scuola Elementare"}}
+    {{"category": "CategoryName", "value": "Exact singular value from user query"}}
   ],
-  "search_keywords": ["bene", "beni", "mobile", "mobili", "scuola", "scuole", "elementare"],
-  "operations": ["SELECT", "WHERE", "COUNT", "GROUP BY", "ORDER BY", "LIMIT"],
-  "filters": ["I beni devono essere attivi"]
+  "search_keywords": ["keyword1", "keyword2", "singular", "plural"],
+  "operations": ["SELECT", "WHERE", "GROUP BY", "ORDER BY"],
+  "filters": ["First natural language condition", "Second natural language condition"]
 }}
 
 #####FEW-SHOT EXAMPLES#####
 
-Input: "Quali sono i beni mobili con etichetta con valore 1 come prima apertura"
+Input: "Quanti beni mobili attivi e non eliminati abbiamo inserito nel 2019?"
 
 {{
   "reasoning_steps": [
-    "The user wants to retrieve movable assets ('beni mobili') and their labels.",
-    "Added specific filters for initial opening ('prima apertura') and a label value of 1. These are statuses/numbers, so they go to filters, not entities."
+    "The user is asking for a count of movable assets based on dates and statuses.",
+    "Following the GOLDEN RULE, 'attivi' and 'non eliminati' are boolean statuses and '2019' is a date. Therefore, the entities list remains completely empty.",
+    "Generic terms like 'beni mobili' are added to search keywords."
   ],
-  "intent": "Ricerca beni mobili con valore 1 come prima apertura",
-  "entities": [
-    {{"category": "TipoBene", "value": "beni mobili"}}
-  ],
-  "search_keywords": ["bene", "beni", "mobile", "mobili", "etichetta", "etichette", "valore", "valori", "prima apertura"],
-  "operations": ["SELECT", "WHERE"],
-  "filters": ["L'etichetta deve avere valore 1", "Deve essere di prima apertura"]
-}}
-
-Input: "Forniscimi l'elenco dei beni attivi, non eliminati"
-
-{{
-  "reasoning_steps": [
-    "The user is asking for a list of active movable assets ('beni attivi').",
-    "Explicitly excluding deleted items ('non eliminati') requires a negative status filter.",
-    "Following the GOLDEN RULE, 'attivi' and 'non eliminati' are statuses, so the entities list remains completely empty."
-  ],
-  "intent": "Elenco beni attivi e non eliminati",
+  "intent": "Conteggio beni mobili attivi e non eliminati inseriti nel 2019",
   "entities": [],
-  "search_keywords": ["bene", "beni", "attivo", "attivi", "eliminato", "eliminati"],
-  "operations": ["SELECT", "WHERE"],
-  "filters": ["I beni devono essere attivi", "I beni non devono essere eliminati"]
+  "search_keywords": ["bene", "beni", "mobile", "mobili", "attivo", "attivi", "eliminato", "eliminati", "inserito", "inseriti", "2019"],
+  "operations": ["SELECT", "COUNT", "WHERE"],
+  "filters": ["I beni devono essere attivi", "I beni non devono essere eliminati", "L'anno di inserimento deve essere il 2019"]
 }}
 
-Input: "Voglio la descrizione dei beni mobili, della specie e sottospecie, e in quale locale ed edficio si trovano, con il tipo etichetta uguale a 'F' e le informazioni su lotto e tipo di etichetta"
+Input: "Mostrami l'elenco dei beni situati nel plesso SCUOLA ELEMENTARE che hanno come condizione giuridica INDISPONIBILE"
 
 {{
   "reasoning_steps": [
-    "The query asks for descriptions of movable assets, their classification, and locations.",
-    "The exact label type 'F' is a specific textual value, so it is extracted as an entity to help the value linker."
+    "The user filters by a specific building ('SCUOLA ELEMENTARE') and a juridical condition ('INDISPONIBILE').",
+    "Based on the GOLDEN RULE exception, 'INDISPONIBILE' is a categorical text status, so it must be extracted as an entity for exact BM25 matching.",
+    "The logical constraints specifying that the building is 'SCUOLA ELEMENTARE' and the juridical condition is 'INDISPONIBILE' are added to the filters to guide the downstream column selection."
   ],
-  "intent": "Dettagli, classificazione e ubicazione beni mobili",
+  "intent": "Elenco beni nella Scuola Elementare con condizione giuridica Indisponibile",
   "entities": [
-    {{"category": "TipoBene", "value": "beni mobili"}},
-    {{"category": "Classificazione", "value": "specie"}},
-    {{"category": "Classificazione", "value": "sottospecie"}},
-    {{"category": "Luogo", "value": "locale"}},
-    {{"category": "Luogo", "value": "edificio"}},
-    {{"category": "TipoEtichetta", "value": "F"}}
+    {{"category": "Edificio", "value": "SCUOLA ELEMENTARE"}},
+    {{"category": "CondizioneGiuridica", "value": "INDISPONIBILE"}}
   ],
-  "search_keywords": ["bene", "beni", "mobile", "mobili", "specie", "sottospecie", "locale", "locali", "edificio", "edifici", "etichetta", "lotto"],
+  "search_keywords": ["bene", "beni", "plesso", "plessi", "scuola", "scuole", "elementare", "condizione", "condizioni", "giuridica", "giuridiche", "indisponibile", "indisponibili"],
   "operations": ["SELECT", "WHERE"],
-  "filters": ["Il tipo etichetta deve essere esattamente 'F'"]
+  "filters": ["L'edificio deve essere 'SCUOLA ELEMENTARE'", "La condizione giuridica deve essere 'INDISPONIBILE'"]
+}}
+
+Input: "In quale locale si trova l'ARMADIO IN METALLO ALTO ANTE SCORR., GRIGIO che appartiene al centro di costo CED?"
+
+{{
+  "reasoning_steps": [
+    "The user is looking for the room containing a highly specific asset ('ARMADIO IN METALLO...') assigned to a specific cost center code ('CED').",
+    "Extracted both the exact textual description and the exact acronym to trigger the Value Linker.",
+    "Added natural language filters to explicitly state that the asset description must be 'ARMADIO IN METALLO...' and its cost center must be 'CED'."
+  ],
+  "intent": "Ricerca locale per specifico armadio in metallo assegnato al CED",
+  "entities": [
+    {{"category": "Oggetto", "value": "ARMADIO IN METALLO ALTO ANTE SCORR., GRIGIO"}},
+    {{"category": "CentroDiCosto", "value": "CED"}}
+  ],
+  "search_keywords": ["locale", "locali", "armadio", "armadi", "metallo", "ante", "scorrevoli", "grigio", "centro", "centri", "costo", "ced"],
+  "operations": ["SELECT", "WHERE"],
+  "filters": ["La descrizione del bene deve essere 'ARMADIO IN METALLO ALTO ANTE SCORR., GRIGIO'", "Il centro di costo associato deve essere 'CED'"]
 }}
 """
 

@@ -14,7 +14,7 @@ from langchain_community.retrievers import BM25Retriever
 
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
-from src.config import BM25_PATH
+from src.config import BM25_PATH, BM25_VALUES_PATH
 
 from src.embedding_factory import get_chroma_embedding_function
 from src.database import DatabaseManager
@@ -61,7 +61,7 @@ def analyze_columns_smart(
     db_path: str, 
     table_name: str, 
     threshold_sparsity: float = 0.95, 
-    threshold_cardinality: int = 1
+    threshold_cardinality: int = 0
 ) -> Tuple[str, List[str], Dict[str, List[str]]]:
     # intelligent column analysis to identify significant columns for the LLM description
     # protects PKs/FKs, discards highly sparse or constant columns
@@ -143,26 +143,45 @@ def analyze_columns_smart(
                 # new category logic via ratio check
                 is_text = ("CHAR" in col_type or "TEXT" in col_type)
                 not_pk = col_name not in pk_list
-                few_distinct = 0 < distinct <= 25
+                valid_rows = total - empty  # Consideriamo solo i record effettivamente valorizzati
                 
-                is_true_category = distinct <= 5 or (distinct < total * 0.5)
-
-                if is_text and not_pk and few_distinct and is_true_category:
+                if is_text and not_pk and valid_rows > 0:
                     try:
-                        cursor.execute(f'SELECT DISTINCT {safe_col} FROM "{safe_table}" WHERE {safe_col} IS NOT NULL LIMIT 25')
-                        vals = [str(r[0]) for r in cursor.fetchall() if r[0] is not None and str(r[0]).strip() != '']
-                        if vals:
-                            vals_str = ", ".join(vals)
-                            categorical_hints.append(f"- Colonna '{col_name}' ({len(vals)} val): [{vals_str}]")
-                    except Exception:
+                        # Recupera i 5 valori più frequenti e conta le loro occorrenze
+                        top_k_query = f"""
+                            SELECT {safe_col}, COUNT(*) as freq 
+                            FROM "{safe_table}" 
+                            WHERE {safe_col} IS NOT NULL AND {safe_col} != ''
+                            GROUP BY {safe_col} 
+                            ORDER BY freq DESC 
+                            LIMIT 5
+                        """
+                        cursor.execute(top_k_query)
+                        top_values = cursor.fetchall()
+                        
+                        if top_values:
+                            # Somma delle frequenze dei top 5
+                            top5_freq_sum = sum(r['freq'] for r in top_values)
+                            
+                            # Calcola la percentuale di copertura
+                            coverage_ratio = top5_freq_sum / valid_rows
+                            
+                            # Se i primi 5 valori coprono almeno l'80% dei dati, è una colonna categorica
+                            if coverage_ratio >= 0.80:
+                                vals = [str(r[0]) for r in top_values]
+                                vals_str = ", ".join(vals)
+                                coverage_pct = round(coverage_ratio * 100, 1)
+                                categorical_hints.append(f"- Colonna '{col_name}' (Top {len(vals)} coprono {coverage_pct}%): [{vals_str}]")
+                    except Exception as e:
                         pass
+                # ------------------------------------------------------------------
             else:
                 if not is_structural:
                     dropped_columns.append(col_name)
 
         # 3. report construction
         if categorical_hints:
-            report_lines.append("---CATEGORICAL VALUES FOUND ---")
+            report_lines.append("--- CATEGORICAL VALUES FOUND ---")
             report_lines.extend(categorical_hints)
             report_lines.append("")
 
@@ -484,7 +503,7 @@ async def main():
     success_count = sum(results)
     print(f"\n🏁 Finito! {success_count}/{len(tables)} tabelle indicizzate correttamente.")
 
-    print("📚 Costruzione indice lessicale BM25 (Hybrid Retrieval)...")
+    print("📚 Costruzione indice lessicale BM25 per lo schema (Hybrid Retrieval)...")
 
     try:
         # Recover the entire vector database you just created
@@ -508,6 +527,29 @@ async def main():
             
     except Exception as e:
         print(f"❌ Errore durante la creazione dell'indice BM25: {e}")
+
+    print("📚 Costruzione indice lessicale BM25 per i valori (Value Linking)...")
+
+    try:
+
+        # Recupera tutti i valori salvati in ChromaDB
+        all_val_data = value_collection.get()
+        val_docs_for_bm25 = []
+        
+        for doc_text, meta in zip(all_val_data['documents'], all_val_data['metadatas']):
+            val_docs_for_bm25.append(Document(page_content=doc_text, metadata=meta))
+            
+        if val_docs_for_bm25:
+            bm25_val_retriever = BM25Retriever.from_documents(val_docs_for_bm25)
+            
+            with open(BM25_VALUES_PATH, 'wb') as f:
+                pickle.dump(bm25_val_retriever, f)
+            print("✅ Indice BM25 dei valori completato e salvato su disco.")
+        else:
+            print("⚠️ Nessun valore trovato per l'indice BM25 dei record.")
+            
+    except Exception as e:
+        print(f"❌ Errore durante la creazione dell'indice BM25 dei valori: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())

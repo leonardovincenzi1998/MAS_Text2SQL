@@ -13,7 +13,7 @@ from langchain_community.retrievers import BM25Retriever
 from src.models import SearchSchemaInput, ExtractedEntity
 from src.embedding_factory import get_shared_embedding_function
 from src.utils import get_canonical_name
-from src.config import CHROMA_PATH, COLLECTION_NAME, BM25_PATH, VALUE_COLLECTION_NAME
+from src.config import CHROMA_PATH, COLLECTION_NAME, BM25_PATH, VALUE_COLLECTION_NAME, BM25_VALUES_PATH
 from src.models import ExtractedEntity
 
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
@@ -173,6 +173,23 @@ def resolve_entities_in_db(entities: List[ExtractedEntity], k: int = 3) -> str:
             embedding_function=EMBEDDING_FUNCTION, 
             collection_name=VALUE_COLLECTION_NAME
         )
+
+        chroma_retriever = vectorstore.as_retriever(search_kwargs={"k": k})
+        
+        try:
+            with open(BM25_VALUES_PATH, 'rb') as f:
+                bm25_retriever = pickle.load(f)
+            bm25_retriever.k = k
+            
+            # SOTA Hybrid: Fortemente sbilanciato sul lessicale (80% BM25, 20% Semantico)
+            retriever = EnsembleRetriever(
+                retrievers=[bm25_retriever, chroma_retriever], 
+                weights=[0.8, 0.2]
+            )
+            print(f"   ibrido (BM25 + Dense RRF) attivo per Entity Resolution (k={k}).")
+        except Exception as e:
+            print(f"⚠️ Indice BM25 valori non trovato. Fallback su Chroma puro. ({e})")
+            retriever = chroma_retriever
         
         resolution_hints = []
         for entity in entities:
@@ -183,11 +200,13 @@ def resolve_entities_in_db(entities: List[ExtractedEntity], k: int = 3) -> str:
             if len(ent_value.strip()) < 2:
                 continue
                 
-            # Facciamo la ricerca semantica usando SOLO il valore (es. "CED")
-            results = vectorstore.similarity_search(ent_value, k=k)
+            # Usiamo invoke sull'EnsembleRetriever per ottenere i documenti fusi e pesati
+            results = retriever.invoke(ent_value)
             if results:
-                matches = [f"'{res.page_content}' (from {res.metadata.get('table_name')}.{res.metadata.get('column_name')})" for res in results]
-                # Aggiungiamo la CATEGORIA all'hint per guidare perfettamente l'Agente SQL
+                # Prendiamo i primi K risultati dopo la fusione RRF
+                top_results = results[:k]
+                matches = [f"'{res.page_content}' (from {res.metadata.get('table_name')}.{res.metadata.get('column_name')})" for res in top_results]
+                
                 resolution_hints.append(
                     f"- [For the category '{ent_category}']: If the user searches for '{ent_value}', use EXACTLY: {', '.join(matches)}"
                 )

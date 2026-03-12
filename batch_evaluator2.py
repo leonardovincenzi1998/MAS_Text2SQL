@@ -292,7 +292,7 @@ async def main():
 
         print("   🧘‍♂️ Pausa di 5 secondi per pulizia cache e raffreddamento GPU...")
         gc.collect() 
-        await asyncio.sleep(5.0)
+        await asyncio.sleep(40.0)
 
     # Salvataggio e Report Finale
     with open(args.output, "w", encoding="utf-8") as f:
