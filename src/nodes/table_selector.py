@@ -4,7 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from src.models import AgentState, TableSelectionResult
 from src.tools import search_schema_tool
 from src.utils import expand_selection_with_graph, get_schema_with_formatted_columns, format_schema_for_llm
-from src.config import llm_reasoning
+from src.config import llm_extractor
 from src.prompts import TABLE_SELECTOR_SYSTEM_PROMPT
 
 # node 2: llm table selection based on semantic search and graph auto-filler
@@ -78,7 +78,7 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
         ("human", "QUERY: {query}\n\n[HINTS FROM AGENT 1]:\n{ext_context}\n\nSCHEMA:\n{schema}")
     ])
     
-    structured_llm = llm_reasoning.with_structured_output(TableSelectionResult).with_retry(stop_after_attempt=3)
+    structured_llm = llm_extractor.with_structured_output(TableSelectionResult).with_retry(stop_after_attempt=3)
     chain = prompt | structured_llm
     
     try:

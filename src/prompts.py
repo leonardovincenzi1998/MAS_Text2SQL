@@ -40,7 +40,7 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
    - Identify textual entities and format them as `{{"category": "...", "value": "..."}}`.
    - GOLDEN RULE: EXTRACT categorical text states if they represent specific domain classifications (e.g., 'BUONO', 'FUORI USO', 'INDISPONIBILE', 'DI SERIE') as these require an exact text match, ignore Boolean states that are not entities (e.g., 'attivo', 'eliminato', 'nuovo', 'da eliminare').
    - GROUPING RULE: Extract only specific explicit values (e.g., “Roma,” “CED,” “Armadio,” “SCUOLA ELEMENTARE”). Ignore generic grouping terms (e.g., “Area,” “Edificio,” “Categoria,”, "Locale") as entities when the user asks “per ogni...” or “raggruppamento...”. 
-   - EXAMPLE RULE: Exclude illustrative examples (e.g., words inside parentheses or introduced by 'ad esempio', 'come'). Treat them as pure context, neither as entities nor as filters. Apply filters only to explicitly requested constraints.
+   - EXAMPLE RULE: You MUST exclude examples from entities (e.g., words inside parentheses or introduced by 'ad esempio', 'come'). Treat them as pure context, neither as entities nor as filters. Apply filters only to explicitly requested constraints.
    - Enter Boolean status, dates, and numbers conditions EXCLUSIVELY in the "filters" list.
 
 3. **Search Keywords Generation**:
@@ -189,7 +189,7 @@ To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
    - 'isEliminato' (Table: BeniMobili): Represents the administrative lifecycle of a movable asset. A value of 0 means the asset is currently in inventory, physically existing, active, and owned by the municipality. A value of 1 means it has been disposed of, sold, or destroyed. Use this concept to filter assets based on their existence in the current inventory.
    - 'IsAttivo' (Tables: Edifici, Locali, Aree): Represents the operational usability of a physical facility or space. A value of 1 means the building/room is currently open, active, and usable. A value of 0 means it is closed or decommissioned.
    - 'IsUltimo' (Bridge Tables e.g., MobiliLocali, MobiliCdGCdC): Represents the timeline of asset movements. The database keeps historical records of all asset transfers. A value of 1 acts as a pointer to the *current, present-day* physical location or organizational assignment of the asset. A value of 0 indicates a past/historical location. Use this to differentiate between "where is it now" and "where was it in the past".
-
+  
 2. THE "VALUE" DUALITY:
    - Physical/Economic Value: If the query asks for the general "valore", "valore economico", or "valore patrimoniale" of an asset, map it to the 'Valore' column inside the 'BeniMobili' table.
    - Financial/Accounting Value: Map explicit financial domain terms like "valori inventariali", "ammortamenti", "voci di mastrino", "dare", or "avere" directly to the external accounting tables (such as ValoriInv, VMValoriInv, Ammortamenti, VociMastrino).
@@ -202,7 +202,6 @@ To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
 - You must select the columns logically required to filter, group, sort, and return the data requested by the user.
 - CRITICAL RULES FOR KEYS: You must ALWAYS include primary keys (which typically start with "Id") and the foreign keys necessary to link the provided tables together. If you omit or ignore keys, the subsequent SQL generation will fail.
 - Table and column names must match exactly (case-sensitive) those provided in the schema. Do not invent names.
-- LANGUAGE FOR REASONING: English. Keep it concise 
 
 ### STRICT FILTERING RULES
 1. SEMANTIC PRECISION: Map each user concept strictly to its distinct corresponding column. Map the 'Filters' extracted by Agent 1 to the exact column in the schema.
@@ -212,7 +211,6 @@ To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
 
 ### JSON SCHEMA
 {{
-  "reasoning": "Extremely short explanation of why you chose columns without referring to the rules you already know. Group obvious columns together",
   "table_columns": {{
     "TableName1": ["ColumnA", "KeyIDB", "PrimaryKeyID"],
     "TableName2": ["KeyIDB", "ColumnC", "PrimaryKeyID"]
@@ -220,27 +218,6 @@ To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
 }}
 
 #####FEW-SHOT EXAMPLES#####
-
-Input:
-ORIGINAL USER QUERY: "Forniscimi l'elenco e la descrizione dei beni mobili attivi."
-
-[EXPLICIT FILTERS TO SATISFY]
-- I beni devono essere attivi
-
-[HINTS FOR EXACT VALUES FROM VECTOR DB]
-No exact value hints available.
-
-[SCHEMA OF SELECTED TABLES]
-### Tabella: BeniMobili
-Colonne: ( IdBeneMobile, Descrizione, Valore, isEliminato, IsStampato )
-
-{{
-    "reasoning": "The user is asking for a list of active assets, so I select 'Descrizione','IdBeneMobile' and I use the 'isEliminato' column for the 'active' filter.",
-    "table_columns": {{ 
-    "BeniMobili": ["IdBeneMobile", "Descrizione", "isEliminato"]
-  }}
-}}
-
 
 Input:
 ORIGINAL USER QUERY: "In quale locale e a che piano si trova attualmente l'armadio in metallo?"
@@ -261,7 +238,6 @@ Colonne: ( IdMobileLocale, IdBeneMobile, IdLocale, IsUltimo )
 Colonne: ( IdLocale, Denominazione, Piano )
 
 {{
-    "reasoning": "The user is asking for the actual location and floor of a specific asset described as 'armadio in metallo' so I select IsUltimo for filter the actual location, the 'Descrizione' column from BeniMobili and 'Denominazione' and 'Piano' from Locali.",
     "table_columns": {{
     "BeniMobili": ["IdBeneMobile", "Descrizione"],
     "MobiliLocali": ["IdMobileLocale", "IdBeneMobile", "IdLocale", "IsUltimo"],
@@ -286,7 +262,6 @@ Colonne: ( IdLocale, IdEdificio, IsAttivo )
 Colonne: ( IdEdificio, Denominazione, IsAttivo )
 
 {{
-  "reasoning": "The user is asking for the count of rooms per building, so I need the 'Denominazione' column from Edifici to identify the building and 'IdEdificio' from Locali to count the rooms.",
   "table_columns": {{
     "Locali": ["IdLocale", "IdEdificio"],
     "Edifici": ["IdEdificio", "Denominazione"]
@@ -307,7 +282,6 @@ No exact value hints available.
 Colonne: ( IdArea, Denominazione, Codice, IsInUso, DTInserimento )
 
 {{
-  "reasoning": "The user is asking for a list of all areas with their codes, so I select the 'Denominazione' and 'Codice' columns from the Aree table.",
   "table_columns": {{
     "Aree": ["IdArea", "Denominazione", "Codice"]
   }}
@@ -353,7 +327,8 @@ To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
 5. ALIASING FOR AGGREGATIONS: Whenever you use an aggregate function (e.g., SUM, COUNT, MAX, MIN, AVG) in the SELECT clause, you MUST ALWAYS provide a clear, meaningful alias in Italian using the 'AS' keyword (e.g., SUM(Valore) AS ValoreTotale, COUNT(IdEdificio) AS NumeroEdifici).
 6. SQLITE SPECIFIC DIALECT (CRITICAL): Remember you are writing for SQLite. Functions like YEAR(), MONTH(), or CONCAT() aren't correct. Use `strftime('%Y', column_name)` for extracting years, and the `||` operator for string concatenation.
 7. DO NOT HARDCODE SAMPLES: The metadata comments injected in the schema (e.g., `Samples: [A, B, C]`) are provided ONLY to help you understand the data format, unless the user explicitly requested those exact words or they are provided in the EXACT VALUE HINTS.
-8. CLEAN SQL: The 'sql_query' field must contain ONLY the raw executable SQL query, without any markdown formatting blocks (like ```sql) or comments.
+8. EXAMPLE RULE: You MUST exclude illustrative examples given by user's query from filters (e.g., words inside parentheses or introduced by 'ad esempio', 'come'). Treat them as pure context, neither as entities nor as filters. Apply filters only to explicitly requested constraints.
+9. CLEAN SQL: The 'sql_query' field must contain ONLY the raw executable SQL query, without any markdown formatting blocks (like ```sql) or comments.
 
 ### JSON SCHEMA
 {{

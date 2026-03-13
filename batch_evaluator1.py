@@ -128,7 +128,7 @@ async def main():
     parser.add_argument("--db", type=str, default=DEFAULT_DB_PATH, help="Path to the SQLite database file")
     parser.add_argument("--golden_set", type=str, default="set_domande.txt", help="Path to the Golden Set txt file")
     parser.add_argument("--output_json", type=str, default="metriche_sota.json", help="Path for the output JSON results")
-    parser.add_argument("--output_txt", type=str, default="report_statistico2.txt", help="Path for the human-readable text report")
+    parser.add_argument("--output_txt", type=str, default="report_statistico1.txt", help="Path for the human-readable text report")
     parser.add_argument("--runs", type=int, default=5, help="Number of times to run EACH question")
     args = parser.parse_args()
 

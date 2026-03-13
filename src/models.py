@@ -33,7 +33,7 @@ class TableSelectionResult(BaseModel):
 
 # Structured output for the column selection agent (Agent 2.5)
 class ColumnSelectionResult(BaseModel):
-    reasoning_steps: List[str] = Field(default_factory=list,description="Extremely short explanation of why you chose columns. Group obvious columns together")
+    #reasoning_steps: List[str] = Field(default_factory=list,description="Extremely short reasoning about the selected columns based on the user's query")
     table_columns: Dict[str, List[str]] = Field(description="Dictionary with exact “table_name” as key and list of exact “column_names” as value.")
     
 # Represents the state of the LangGraph multi-agent workflow

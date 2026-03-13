@@ -2,7 +2,7 @@ from typing import Dict, Any
 from langchain_core.prompts import ChatPromptTemplate
 from src.models import AgentState, ColumnSelectionResult
 from src.utils import format_schema_for_llm
-from src.config import llm_reasoning
+from src.config import llm_extractor
 from src.prompts import COLUMN_SELECTOR_SYSTEM_PROMPT
 
 # node 2.5: targeted column selection (schema linking) to prune DDL
@@ -55,7 +55,7 @@ async def run_column_selector(state: AgentState) -> Dict[str, Any]:
         ("human", "{formatted_input}")
     ])
     
-    structured_llm = llm_reasoning.with_structured_output(ColumnSelectionResult).with_retry(stop_after_attempt=3)
+    structured_llm = llm_extractor.with_structured_output(ColumnSelectionResult).with_retry(stop_after_attempt=3)
     chain = prompt | structured_llm
     
     try:
@@ -63,8 +63,8 @@ async def run_column_selector(state: AgentState) -> Dict[str, Any]:
             "formatted_input": human_message_content
         })
         
-        reasoning_text = " ".join(result.reasoning_steps)
-        print(f"   -> 🧠 Reasoning: {reasoning_text}")
+        #reasoning_text = " ".join(result.reasoning_steps)
+        #print(f"   -> 🧠 Reasoning: {reasoning_text}")
         print(f"   -> 📎 Selected Columns: {result.table_columns}")
         
         return {
