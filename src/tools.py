@@ -93,10 +93,9 @@ def search_schema_tool(query: str, k: int = 10) -> str: #mettere k = 7 con Llama
             bm25_retriever.k = actual_k
             
             # Reciprocal Rank Fusion (RRF): combines the two retrievers. 
-            # The weights decide which one ‘counts’ more. 0.5/0.5 is the balanced default.
             retriever = EnsembleRetriever(
                 retrievers=[bm25_retriever, chroma_retriever], 
-                weights=[0.4, 0.6]
+                weights=[0.5, 0.5]
             )
             print(f"ibrido (BM25 + Dense RRF) attivo (k={actual_k}).")
         except Exception as e:
@@ -130,7 +129,7 @@ def search_schema_tool(query: str, k: int = 10) -> str: #mettere k = 7 con Llama
             if not missing_tables:
                 break 
                 
-            print(f"🔗 [GRAPH RAG] Expansion Hop {hop+1}: Fetching {len(missing_tables)} linked tables: {list(missing_tables)[:5]}...")
+            print(f"🔗 [GRAPH RAG] Expansion Hop {hop+1}: Fetching {len(missing_tables)} linked tables: {list(missing_tables)[:10]}...")
             try:
                 expansion_results = collection.get(ids=list(missing_tables))
                 

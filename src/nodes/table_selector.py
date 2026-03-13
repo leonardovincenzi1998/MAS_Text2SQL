@@ -25,7 +25,7 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
     else:
         vector_search_query = state["user_query"]
         
-    print(f"   Testo usato per Chroma: '{vector_search_query}'")
+    print(f"  Testo usato per Chroma: '{vector_search_query}'")
     
     # schema retrieval via chromadb tool
     try:
@@ -59,15 +59,18 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
 
     ext_context = "No extraction provided."
     if extraction:
-        
-        # --- NUOVA FORMATTAZIONE ENTITA' PER IL PROMPT ---
+
         entities_str = "None"
         if hasattr(extraction, 'entities') and extraction.entities:
             entities_str = ", ".join([f"[{e.category}: '{e.value}']" for e in extraction.entities])
-            
+
+        filters_str = "Nessun filtro"
+        if hasattr(extraction, 'filters') and extraction.filters:
+            filters_str = " | ".join(extraction.filters)
+
         ext_context = (
-            f"- Intent: {getattr(extraction, 'intent', '')}\n"
             f"- Entities: {entities_str}\n"
+            f"- Filters: {filters_str}\n"
         )
     
     prompt = ChatPromptTemplate.from_messages([
@@ -97,14 +100,15 @@ async def run_table_selector(state: AgentState) -> Dict[str, Any]:
             root_table_real=result.central_entity
         )
         
+        log_msg=""
+
         # 3. calculate additions for debugging
         added_tables = set(final_selection) - set(llm_selection)
-        
         if added_tables:
             msg_autofix = f"\n🤖 [AUTO-FIX] The system has added missing bridge tables: {list(added_tables)}"
             log_msg += msg_autofix
             print(msg_autofix)
-         
+        
         log_msg = f"✅ Selected Tables: {final_selection}\n"
         
         return {

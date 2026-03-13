@@ -28,16 +28,27 @@ async def run_column_selector(state: AgentState) -> Dict[str, Any]:
 
     entity_hints = state.get("entity_hints", "No exact value hints available.")
 
-    # --- COSTRUZIONE DEL PROMPT HUMAN ARRICCHITO ---
-    human_message_content = f"""ORIGINAL USER QUERY: {state['user_query']}
+    extraction = state.get("extraction_result")
+    extracted_filters = "Nessun filtro logico esplicito."
+    
+    if extraction and hasattr(extraction, 'filters') and extraction.filters:
+        # Passiamo SOLO i filtri, non l'intent, per evitare ridondanza
+        extracted_filters = "\n- ".join(extraction.filters)
 
-    [HINTS FOR EXACT VALUES FROM VECTOR DB]
+    # --- COSTRUZIONE DEL PROMPT HUMAN ESTREMAMENTE FOCALIZZATO ---
+    human_message_content = f"""USER QUERY: "{state['user_query']}"
+
+    [EXPLICIT FILTERS TO SATISFY]
+    - {extracted_filters}
+
+    [HINTS FOR EXACT VALUES]
     {entity_hints}
 
-    [SCHEMA OF SELECTED TABLES]
+    [SCHEMA TO PRUNE]
     {markdown_context}
 
     """
+
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", COLUMN_SELECTOR_SYSTEM_PROMPT),
@@ -52,6 +63,8 @@ async def run_column_selector(state: AgentState) -> Dict[str, Any]:
             "formatted_input": human_message_content
         })
         
+        reasoning_text = " ".join(result.reasoning_steps)
+        print(f"   -> 🧠 Reasoning: {reasoning_text}")
         print(f"   -> 📎 Selected Columns: {result.table_columns}")
         
         return {

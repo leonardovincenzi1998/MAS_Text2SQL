@@ -14,7 +14,6 @@ class ExtractedEntity(BaseModel):
 
 # Structured output for the entity extraction agent
 class ExtractionResult(BaseModel):
-    reasoning_steps: List[str] = Field(...,description="List of 2-3 short sentences explaining the intent, entities, and filters. E.g., ['User wants active buildings.', 'Filter added for active status.']")
     intent: str = Field(..., description="Concise description of the user's information retrieval goal.")
     entities: List[ExtractedEntity] = Field(
         default_factory=list, 
@@ -34,6 +33,7 @@ class TableSelectionResult(BaseModel):
 
 # Structured output for the column selection agent (Agent 2.5)
 class ColumnSelectionResult(BaseModel):
+    reasoning_steps: List[str] = Field(default_factory=list,description="Extremely short explanation of why you chose columns. Group obvious columns together")
     table_columns: Dict[str, List[str]] = Field(description="Dictionary with exact “table_name” as key and list of exact “column_names” as value.")
     
 # Represents the state of the LangGraph multi-agent workflow
@@ -54,8 +54,16 @@ class AgentState(TypedDict):
     data_sample: Optional[List[Dict[str, Any]]] = None # Extracted data sample (if successful)
     entity_hints: str
 
+class SqlGenerationResult(BaseModel):
+    reasoning_steps: List[str] = Field(
+        description="Extremely short explanation on how to build the query (e.g., table joins, aggregations, WHERE clauses)."
+    )
+    sql_query: str = Field(
+        description="The final, executable SQLite query. Strictly SQL, no markdown formatting."
+    )
+    
 class CriticResult(BaseModel):
-    correction_plan: str = Field(description="Step-by-step reasoning that identifies the error category (from the taxonomy) and briefly explains how to correct it.")
+    correction_plan: str = Field(description="Extremely short reasoning that identifies the error category (from the taxonomy) and briefly explains how to correct it.")
     corrected_sql: str = Field(description="The new SQL query is correct and ready to be executed, without markdown or comments.")
 # Dependencies injected into the schema validation processes
 @dataclass

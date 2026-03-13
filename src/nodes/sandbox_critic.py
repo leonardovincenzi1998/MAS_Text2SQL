@@ -101,7 +101,6 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         else:
             critic_ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
     
-    # --- CORREZIONE FORMATTAZIONE ENTITA' PER IL CRITIC ---
     extraction = state.get("extraction_result")
     entity_hints = state.get("entity_hints", "Nessun hint disponibile.") # RECUPERA GLI HINTS
     
@@ -113,6 +112,7 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
             
         # INIETTA GLI HINTS NELL'INFO PER IL CRITIC
         extracted_info = (
+            f"Intent: {getattr(extraction, 'intent', 'Non specificato')}\n"
             f"Entities: {entities_str}\n"
             f"Filters: {getattr(extraction, 'filters', [])}\n"
             f"EXACT VALUE HINTS: {entity_hints}" 
@@ -135,7 +135,10 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         response: CriticResult = await structured_llm.ainvoke(messages)
         
         print(f" 💡 (Critic Plan): {response.correction_plan}")
-        print(f" 🔧 (New SQL): {response.corrected_sql}")
+        
+        raw_sql = response.corrected_sql.strip()
+        clean_sql = raw_sql.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()   
+        print(f"   🔧 (New SQL): {clean_sql}")
         
         # 4. update the status
         return {

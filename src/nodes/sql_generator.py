@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from langchain_core.prompts import ChatPromptTemplate
-from src.models import AgentState
+from src.models import AgentState, SqlGenerationResult
 from src.database import DatabaseManager
 from src.utils import validate_ast_and_format, prune_ddl_ast, format_table_metadata_as_sql_comment
 from src.config import llm_sql
@@ -54,14 +54,12 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         
     except Exception as e:
         return {"error": f"DDL extraction error: {str(e)}"}    
-    # RIMOSSO IL SECONDO EXCEPT DUPLICATO
 
     # format analytical context from agent 1
     extraction = state.get("extraction_result")
     extracted_info = "None"
 
     if extraction:
-        # --- CORREZIONE FORMATTAZIONE ENTITA' ---
         entities_str = "Nessuna"
         if hasattr(extraction, 'entities') and extraction.entities:
             entities_str = ", ".join([f"[{e.category}: '{e.value}']" for e in extraction.entities])
@@ -79,7 +77,8 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         ("human", "### CONTEXT\n[ENRICHED DDL SCHEMA]\n{ddl_context}\n\n[EXTRACTED INFO]\n{extracted_info}\n\n[EXACT VALUE HINTS FROM VECTOR DB]\n{entity_hints}\n\n### USER QUESTION\n{query}\n\nOutput:")
     ])
     
-    chain = prompt | llm_sql
+    structured_llm = llm_sql.with_structured_output(SqlGenerationResult)
+    chain = prompt | structured_llm
 
     try:
         response = await chain.ainvoke({
@@ -90,9 +89,14 @@ async def run_sql_generator(state: AgentState) -> Dict[str, Any]:
         })
         
         # clean output to remove any residual markdown injected by the llm
-        raw_sql = response.content.strip()
-        clean_sql = raw_sql.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()
+        raw_sql = response.sql_query.strip()
+        clean_sql = raw_sql.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()   
         
+        # Stampiamo il reasoning per debug visivo nel terminale
+        print("\n   🧠 (SQL Generator) Reasoning Steps:")
+        for idx, step in enumerate(response.reasoning_steps):
+            print(f"      {idx+1}. {step}")
+
         # execution of the ast validator
         print("   🔍 (AST Validator) Controllo conformità Tabelle e Colonne...")
         final_sql, validation_error = validate_ast_and_format(clean_sql, selected_tables, selected_columns)

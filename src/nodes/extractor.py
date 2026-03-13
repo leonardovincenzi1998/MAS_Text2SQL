@@ -22,7 +22,6 @@ async def run_entity_extractor(state: AgentState) -> Dict[str, Any]:
         # safely handle empty lists
         filtri = extraction.filters if extraction.filters else ["None"]
         chiavi_ricerca = extraction.search_keywords if hasattr(extraction, 'search_keywords') and extraction.search_keywords else ["None"]
-        ragionamento_str = " ".join(extraction.reasoning_steps) if extraction.reasoning_steps else "Nessuno"
 
         if extraction.entities:
             # Estrae la stringa leggibile: "[Categoria: Valore], [Categoria: Valore]"
@@ -30,7 +29,6 @@ async def run_entity_extractor(state: AgentState) -> Dict[str, Any]:
         else:
             entita_formattate = "None"
 
-        print(f"   -> 🧠 Reasoning: {ragionamento_str}")
         print(f"   -> 🎯 Intent: {extraction.intent}")
         print(f"   -> 🔑 Entities: {entita_formattate}") 
         print(f"   -> 🔎 Search Keywords: {chiavi_ricerca}")
@@ -38,7 +36,7 @@ async def run_entity_extractor(state: AgentState) -> Dict[str, Any]:
         
         return {
             "extraction_result": extraction,
-            "messages": [f"Entities: {entita_formattate} | Filters: {filtri} | Intent: {extraction.intent}"]
+            "messages": [f"Entities: {entita_formattate} | Filters: {filtri} | Intent: {extraction.intent} | Search Keywords: {chiavi_ricerca}"]
         }
     except Exception as e:
         print(f"   ❌ (Entity Extractor) Errore CRITICO: {str(e)}")
