@@ -38,19 +38,18 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 
 2. **Entity & Attribute Mapping (KEY-VALUE FORMAT)**:
    - Identify textual entities and format them as `{{"category": "...", "value": "..."}}`.
-   - GOLDEN RULE: EXTRACT categorical text states if they represent specific domain classifications (e.g., 'BUONO', 'FUORI USO', 'INDISPONIBILE', 'DI SERIE') as these require an exact text match, ignore Boolean states that are not entities (e.g., 'attivo', 'eliminato', 'nuovo', 'da eliminare').
+   - GOLDEN RULE: Extract as entities categorical text states if they represent specific domain classifications (e.g., 'BUONO', 'FUORI USO', 'INDISPONIBILE', 'DI SERIE') as these require an exact text match, but You MUST exclude them if they're used as illustrative examples in the user's query (e.g., words inside parentheses or after 'ad esempio', 'come').
    - GROUPING RULE: Extract only specific explicit values (e.g., “Roma,” “CED,” “Armadio,” “SCUOLA ELEMENTARE”). Ignore generic grouping terms (e.g., “Area,” “Edificio,” “Categoria,”, "Locale") as entities when the user asks “per ogni...” or “raggruppamento...”. 
-   - EXAMPLE RULE: You MUST exclude examples from entities (e.g., words inside parentheses or introduced by 'ad esempio', 'come'). Treat them as pure context, neither as entities nor as filters. Apply filters only to explicitly requested constraints.
    - Enter Boolean status, dates, and numbers conditions EXCLUSIVELY in the "filters" list.
-
+   - The terms "beni" or "beni mobili" represent the core domain of the database. NEVER extract them as key-value pairs in the "entities" list.
+   
 3. **Search Keywords Generation**:
    - For every entity identified, generate root keywords optimized for a Semantic Search Engine. Break down multi-word entities. ALWAYS include both singular and plural forms (e.g., "Area", "Aree", "Locale", "Locali").
 
 4. **Filters Formulation (NATURAL LANGUAGE)**:
    - Extract the exact condition IN NATURAL LANGUAGE (e.g., "La città deve essere Roma", "Il bene deve essere attivo", "L'edificio deve essere attivo"). 
    - If no filters are requested, output an empty list [].
-   - “Beni” always mean “Beni mobili”, it is a domain-specific word that should not be treated as an entity or filter.
-   - Be precise with the subject: when writing conditions in “filters”, ALWAYS keep the specific subject mentioned by the user (e.g. “L'edificio deve essere attivo”, “Il locale deve essere attivo”). Generalising using the word “beni” is incorrect, unless the user has explicitly meant "beni".
+   - When writing natural language conditions in the "filters" list, ALWAYS use the exact grammatical subject mentioned by the user (e.g., "L'edificio deve essere attivo", "Il locale deve essere attivo", "I beni mobili devono avere un valore > 0"). Do not automatically use "beni mobili" as the subject of the filter if the user was actually referring to the status of a building or a room.
    - Domain assumption: verbs used in the present tense, such as ‘ospita’, ‘si trova’ or ‘assegnato,’ ALWAYS imply the CURRENT situation, requiring the addition of the temporal condition in the filters: ‘The location or assignment must be the current one.’
 
    ### JSON SCHEMA 
@@ -71,7 +70,7 @@ Input: "Quanti beni mobili attivi e non eliminati abbiamo inserito nel 2019?"
   "intent": "Conteggio beni mobili attivi e non eliminati inseriti nel 2019",
   "entities": [],
   "search_keywords": ["bene", "beni", "mobile", "mobili", "attivo", "attivi", "eliminato", "eliminati", "inserito", "inseriti", "2019"],
-  "filters": ["I beni devono essere attivi", "I beni non devono essere eliminati", "L'anno di inserimento deve essere il 2019"]
+  "filters": ["L'edificio deve essere 'SCUOLA ELEMENTARE'", "La condizione giuridica deve essere 'INDISPONIBILE'", "La collocazione nel plesso deve essere quella attuale"]
 }}
 
 Input: "Mostrami l'elenco dei beni situati nel plesso SCUOLA ELEMENTARE che hanno come condizione giuridica INDISPONIBILE"
@@ -94,8 +93,8 @@ Input: "In quale locale si trova l'ARMADIO IN METALLO ALTO ANTE SCORR., GRIGIO c
     {{"category": "Oggetto", "value": "ARMADIO IN METALLO ALTO ANTE SCORR., GRIGIO"}},
     {{"category": "CentroDiCosto", "value": "CED"}}
   ],
-  "search_keywords": ["locale", "locali", "armadio", "armadi", "metallo", "ante", "scorrevoli", "grigio", "centro", "centri", "costo", "ced"],
-  "filters": ["La descrizione del bene deve essere 'ARMADIO IN METALLO ALTO ANTE SCORR., GRIGIO'", "Il centro di costo associato deve essere 'CED'"]
+  "search_keywords": ["locale", "locali", "armadio", "armadi", "metallo", "ante", "scorrevoli", "grigio", "grigi", "centro", "centri", "costo", "ced"],
+  "filters": ["La descrizione del bene mobile deve essere 'ARMADIO IN METALLO ALTO ANTE SCORR., GRIGIO'", "Il centro di costo associato deve essere 'CED'", "La collocazione nel locale deve essere quella attuale", "L'assegnazione al centro di costo deve essere quella attuale"]
 }}
 """
 
@@ -129,48 +128,51 @@ The database is part of a management system for the inventory of a municipality'
 #####FEW-SHOT EXAMPLES#####
 
 Input:
-QUERY: "Dimmi in quali stanze si trovano gli armadi e a che piano sono."
+QUERY: "Qual è l'indirizzo dell'edificio in cui si trova attualmente il bene mobile con id 1?"
 
 [HINTS FROM AGENT 1]:
-- Entities: ['stanze', 'armadi', 'piano']
+- Entities: None
+- Filters: L'id del bene mobile deve essere 1 | La collocazione nell'edificio deve essere quella attuale
 
 SCHEMA: 
 [Context with BeniMobili, MobiliLocali, Locali, Edifici, SottoSpeci...]
 
 {{
 "central_entity": "BeniMobili",
-"relevant_tables": ["BeniMobili", "MobiliLocali", "Locali"]
+"relevant_tables": ["BeniMobili", "MobiliLocali", "Locali", "Edifici"]
 }}
 
 
 Input: 
-QUERY: "Quante schede patrimoniali attive abbiamo inserito nel 2019?"
+QUERY: "Mostrami l'elenco dei beni situati nel plesso SCUOLA ELEMENTARE che hanno come condizione giuridica INDISPONIBILE"
 
 [HINTS FROM AGENT 1]:
-- Entities: ['schede patrimoniali', '2019']
+- Entities: [Edificio: 'SCUOLA ELEMENTARE'], [CondizioneGiuridica: 'INDISPONIBILE']
+- Filters: L'edificio deve essere 'SCUOLA ELEMENTARE' | La condizione giuridica deve essere 'INDISPONIBILE' | La collocazione nel plesso deve essere quella attuale
 
 SCHEMA: 
-[Context with SchedePatrimoniali, TipiValoreInv, Locali...]
+[Context with BeniMobili, MobiliLocali, Locali, Edifici, CondizioniGiuridiche, Aspetti...]
 
 {{
-"central_entity": "SchedePatrimoniali",
-"relevant_tables": ["SchedePatrimoniali"]
+"central_entity": "BeniMobili",
+"relevant_tables": ["BeniMobili", "MobiliLocali", "Locali", "Edifici", "CondizioniGiuridiche"]
 }}
 
 
 Input:
-QUERY: "Quali sono i codici ARCONET dei piani economici usati per le nostre categorie contabili?"
+QUERY: "Fornisci la descrizione di ogni bene mobile e raggruppale."
 
 [HINTS FROM AGENT 1]:
-- Entities: ['codici ARCONET', 'piani economici', 'categorie contabili']
+- Entities: None
+- Filters: None
 
 SCHEMA: 
-[Context with Categorie, PianiEcoStatiPatrimoniali, Locali...]
+[Context with BeniMobili, SottoSpeci, Speci, Locali...]
 
-{{   
-"central_entity": "Categorie",
-"relevant_tables": ["Categorie", "PianiEcoStatiPatrimoniali"]
-}}
+{   
+"central_entity": "BeniMobili",
+"relevant_tables": ["BeniMobili"]
+}
 """
 
 # Prompt per src/agent.py -> Column Selector (Agente 2.5)
@@ -185,17 +187,10 @@ Please note: The database contains many Boolean columns (0/1) beginning with “
 [DOMAIN MAPPING CRITICAL RULES]
 To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
 
-1. CORE DOMAIN SEMANTICS FOR STATUS COLUMNS:
+[CORE DOMAIN SEMANTICS FOR STATUS COLUMNS]
    - 'isEliminato' (Table: BeniMobili): Represents the administrative lifecycle of a movable asset. A value of 0 means the asset is currently in inventory, physically existing, active, and owned by the municipality. A value of 1 means it has been disposed of, sold, or destroyed. Use this concept to filter assets based on their existence in the current inventory.
    - 'IsAttivo' (Tables: Edifici, Locali, Aree): Represents the operational usability of a physical facility or space. A value of 1 means the building/room is currently open, active, and usable. A value of 0 means it is closed or decommissioned.
    - 'IsUltimo' (Bridge Tables e.g., MobiliLocali, MobiliCdGCdC): Represents the timeline of asset movements. The database keeps historical records of all asset transfers. A value of 1 acts as a pointer to the *current, present-day* physical location or organizational assignment of the asset. A value of 0 indicates a past/historical location. Use this to differentiate between "where is it now" and "where was it in the past".
-  
-2. THE "VALUE" DUALITY:
-   - Physical/Economic Value: If the query asks for the general "valore", "valore economico", or "valore patrimoniale" of an asset, map it to the 'Valore' column inside the 'BeniMobili' table.
-   - Financial/Accounting Value: Map explicit financial domain terms like "valori inventariali", "ammortamenti", "voci di mastrino", "dare", or "avere" directly to the external accounting tables (such as ValoriInv, VMValoriInv, Ammortamenti, VociMastrino).
-
-3. BOOLEAN FLAGS PRECAUTION:
-   - Select boolean flags exclusively when the user's query explicitly defines a condition that matches their precise business meaning. Rely entirely on the explicit filters to trigger their inclusion.
 
 ### OPERATIONAL CONSTRAINTS
 - You will receive the ORIGINAL USER QUERY, EXPLICIT FILTERS extracted from the query, HINTS from the Vector DB for exact value matching, and the SCHEMA (in Markdown format) EXCLUSIVELY for tables that have already been confirmed as necessary.
@@ -300,35 +295,26 @@ The database is part of a management system for the inventory of a municipality'
 [DOMAIN MAPPING CRITICAL RULES]
 To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
 
-1. CORE DOMAIN SEMANTICS FOR STATUS COLUMNS:
+[CORE DOMAIN SEMANTICS FOR STATUS COLUMNS]
    - 'isEliminato' (Table: BeniMobili): Represents the administrative lifecycle of a movable asset. A value of 0 means the asset is currently in inventory, physically existing, active, and owned by the municipality. A value of 1 means it has been disposed of, sold, or destroyed. Use this concept to filter assets based on their existence in the current inventory.
    - 'IsAttivo' (Tables: Edifici, Locali, Aree): Represents the operational usability of a physical facility or space. A value of 1 means the building/room is currently open, active, and usable. A value of 0 means it is closed or decommissioned.
    - 'IsUltimo' (Bridge Tables e.g., MobiliLocali, MobiliCdGCdC): Represents the timeline of asset movements. The database keeps historical records of all asset transfers. A value of 1 acts as a pointer to the *current, present-day* physical location or organizational assignment of the asset. A value of 0 indicates a past/historical location. Use this to differentiate between "where is it now" and "where was it in the past".
 
-2. THE "VALUE" DUALITY:
-   - Physical/Economic Value: If the query asks for the general "valore", "valore economico", or "valore patrimoniale" of an asset, map it to the 'Valore' column inside the 'BeniMobili' table.
-   - Financial/Accounting Value: Map explicit financial domain terms like "valori inventariali", "ammortamenti", "voci di mastrino", "dare", or "avere" directly to the external accounting tables (such as ValoriInv, VMValoriInv, Ammortamenti, VociMastrino).
-
-3. BOOLEAN FLAGS PRECAUTION:
-   - Select boolean flags exclusively when the user's query explicitly defines a condition that matches their precise business meaning. Rely entirely on the explicit filters to trigger their inclusion.
-
 ### OPERATIONAL CONSTRAINTS
 - INPUT: You will receive the user query in Italian, the ENRICHED DDL SCHEMA of the selected tables, EXACT VALUE HINTS from the Vector DB, and EXTRACTED INFO (Entities and Filters).
 - OUTPUT FORMAT: You must strictly adhere to the provided structured JSON schema (reasoning_steps and sql_query).
-- CHAIN OF THOUGHT: Use the 'reasoning_steps' array to briefly analyze the request, identify the core table, the necessary JOINs based on Foreign Keys, and how the user's filters map to specific columns or exact string hints.
+- CHAIN OF THOUGHT: Keep the'reasoning_steps' array extremely concise and direct to briefly explain the SQL query construction.
 - USE EXACT NAMES: You must use the exact names of the tables and columns defined in the provided DDL (case-sensitive).
 - RELATIONS: if available, it is necessary to use the external key definitions provided in the DDL to perform correct and necessary JOINs. Omitting a JOIN or a required key will result in a runtime error.
 
 ### STRICT RULES FOR SQL GENERATION
 1. THE "SELECT" CLAUSE: Put in the SELECT clause ONLY the columns explicitly requested by the user. Use other columns ONLY in the WHERE clause if necessary. Do NOT select primary keys unless explicitly requested or if it's necessary for grouping.
-2. THE "WHERE" CLAUSE & EXACT VALUES (CRITICAL): Deduce your WHERE conditions using the User Query and the Extracted Filters. **CRUCIAL**: You MUST always check the [EXACT VALUE HINTS FROM VECTOR DB]. If a hint specifies that a user's word maps to a specific exact string in the database, you MUST use that exact string in your WHERE clause instead of the user's generic word.
+2. THE "WHERE" CLAUSE & EXACT VALUES (CRITICAL): Deduce your WHERE conditions using the User Query and the Extracted Filters. You MUST use the [EXACT VALUE HINTS]. HOWEVER, EXCEPTION: If an EXACT VALUE HINT corresponds to a word that was provided merely as an illustrative example in the user's prompt (e.g., inside parentheses or after 'ad esempio', 'come'), you MUST IGNORE that hint and DO NOT use it in the WHERE clause.
 3. THE "GROUP BY" CLAUSE: Use GROUP BY or aggregations ONLY IF the user explicitly asks for them logically (e.g., "quanti", "totale", "per ogni", "raggruppati per"). 
 4. BEST PRACTICE FOR GROUPING: Only if a GROUP BY is actually required, you MUST include the entity's Primary Key alongside its name in the GROUP BY to prevent homonym merging.
 5. ALIASING FOR AGGREGATIONS: Whenever you use an aggregate function (e.g., SUM, COUNT, MAX, MIN, AVG) in the SELECT clause, you MUST ALWAYS provide a clear, meaningful alias in Italian using the 'AS' keyword (e.g., SUM(Valore) AS ValoreTotale, COUNT(IdEdificio) AS NumeroEdifici).
 6. SQLITE SPECIFIC DIALECT (CRITICAL): Remember you are writing for SQLite. Functions like YEAR(), MONTH(), or CONCAT() aren't correct. Use `strftime('%Y', column_name)` for extracting years, and the `||` operator for string concatenation.
-7. DO NOT HARDCODE SAMPLES: The metadata comments injected in the schema (e.g., `Samples: [A, B, C]`) are provided ONLY to help you understand the data format, unless the user explicitly requested those exact words or they are provided in the EXACT VALUE HINTS.
-8. EXAMPLE RULE: You MUST exclude illustrative examples given by user's query from filters (e.g., words inside parentheses or introduced by 'ad esempio', 'come'). Treat them as pure context, neither as entities nor as filters. Apply filters only to explicitly requested constraints.
-9. CLEAN SQL: The 'sql_query' field must contain ONLY the raw executable SQL query, without any markdown formatting blocks (like ```sql) or comments.
+7. DO NOT HARDCODE SAMPLES: The metadata comments injected in the schema (e.g., `Samples: [A, B, C]`) are provided ONLY to help you understand the data format, unless the user explicitly requested those exact words or they are provided in the EXACT VALUE HINTS.8. CLEAN SQL: The 'sql_query' field must contain ONLY the raw executable SQL query, without any markdown formatting blocks (like ```sql) or comments.
 
 ### JSON SCHEMA
 {{
@@ -352,24 +338,17 @@ Please note: The database contains many Boolean columns (0/1) beginning with “
 [DOMAIN MAPPING CRITICAL RULES]
 To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
 
-1. CORE DOMAIN SEMANTICS FOR STATUS COLUMNS:
+[CORE DOMAIN SEMANTICS FOR STATUS COLUMNS]
    - 'isEliminato' (Table: BeniMobili): Represents the administrative lifecycle of a movable asset. A value of 0 means the asset is currently in inventory, physically existing, active, and owned by the municipality. A value of 1 means it has been disposed of, sold, or destroyed. Use this concept to filter assets based on their existence in the current inventory.
    - 'IsAttivo' (Tables: Edifici, Locali, Aree): Represents the operational usability of a physical facility or space. A value of 1 means the building/room is currently open, active, and usable. A value of 0 means it is closed or decommissioned.
    - 'IsUltimo' (Bridge Tables e.g., MobiliLocali, MobiliCdGCdC): Represents the timeline of asset movements. The database keeps historical records of all asset transfers. A value of 1 acts as a pointer to the *current, present-day* physical location or organizational assignment of the asset. A value of 0 indicates a past/historical location. Use this to differentiate between "where is it now" and "where was it in the past".
-
-2. THE "VALUE" DUALITY:
-   - Physical/Economic Value: If the query asks for the general "valore", "valore economico", or "valore patrimoniale" of an asset, map it to the 'Valore' column inside the 'BeniMobili' table.
-   - Financial/Accounting Value: Map explicit financial domain terms like "valori inventariali", "ammortamenti", "voci di mastrino", "dare", or "avere" directly to the external accounting tables (such as ValoriInv, VMValoriInv, Ammortamenti, VociMastrino).
-
-3. BOOLEAN FLAGS PRECAUTION:
-   - Select boolean flags exclusively when the user's query explicitly defines a condition that matches their precise business meaning.
 
 ### OPERATIONAL CONSTRAINTS
 - OUTPUT FORMAT: Strictly valid JSON.
 - NO CONVERSATIONAL FILLERS: Do not add greetings or markdown blocks (like ```sql).
 - SQLITE DIALECT: Ensure the corrected SQL uses pure SQLite syntax (e.g., no YEAR() or CONCAT()).
-- EXACT VALUE HINTS (CRITICAL): If the Extracted Semantic Rules contain "EXACT VALUE HINTS", you MUST use those exact strings in your WHERE conditions. If the previous query failed with an "empty result" error, it is highly likely because it ignored these exact values or used incorrect casing.
-
+-THE "WHERE" CLAUSE & EXACT VALUES (CRITICAL): Deduce your WHERE conditions using the User Query and the Extracted Filters. You MUST use the [EXACT VALUE HINTS]. HOWEVER, EXCEPTION: If an EXACT VALUE HINT corresponds to a word that was provided merely as an illustrative example in the user's prompt (e.g., inside parentheses or after 'ad esempio', 'come'), you MUST IGNORE that hint and DO NOT use it in the WHERE clause.
+ 
 --- CONTEXT INFORMATION ---
 Original question from the user: {user_query}
 Relevant tables: {selected_tables}
