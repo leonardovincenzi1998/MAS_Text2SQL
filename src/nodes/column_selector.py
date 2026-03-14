@@ -23,7 +23,7 @@ async def run_column_selector(state: AgentState) -> Dict[str, Any]:
         tbl for tbl in full_schema_list 
         if tbl.get("table_name", tbl.get("table")) in selected_tables
     ]
-    markdown_context = format_schema_for_llm(selected_schema_list)
+    markdown_context = format_schema_for_llm(selected_schema_list, include_samples=True)
 
 
     entity_hints = state.get("entity_hints", "No exact value hints available.")
@@ -31,12 +31,21 @@ async def run_column_selector(state: AgentState) -> Dict[str, Any]:
     extraction = state.get("extraction_result")
     extracted_filters = "Nessun filtro logico esplicito."
     
-    if extraction and hasattr(extraction, 'filters') and extraction.filters:
-        # Passiamo SOLO i filtri, non l'intent, per evitare ridondanza
-        extracted_filters = "\n- ".join(extraction.filters)
+    if extraction:
+        # Estrazione dell'intent
+        if hasattr(extraction, 'intent') and extraction.intent:
+            extracted_intent = extraction.intent
+            
+        # Estrazione dei filtri
+        if hasattr(extraction, 'filters') and extraction.filters:
+            extracted_filters = "\n- ".join(extraction.filters)
 
     # --- COSTRUZIONE DEL PROMPT HUMAN ESTREMAMENTE FOCALIZZATO ---
+    # Aggiunto il blocco [INTENT]
     human_message_content = f"""USER QUERY: "{state['user_query']}"
+
+    [INTENT]
+    {extracted_intent}
 
     [EXPLICIT FILTERS TO SATISFY]
     - {extracted_filters}

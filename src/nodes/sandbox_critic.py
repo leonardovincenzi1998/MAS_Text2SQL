@@ -1,9 +1,10 @@
+import re
 import sqlite3
 from typing import Dict, Any
 from langchain_core.messages import SystemMessage
-from src.models import AgentState, CriticResult
+from src.models import AgentState
 from src.database import DatabaseManager
-from src.utils import prune_ddl_ast, format_table_metadata_as_sql_comment
+from src.utils import prune_ddl_ast, format_table_metadata_as_sql_comment, validate_ast_and_format
 from src.config import llm_reasoning
 from src.prompts import QUERY_CRITIC_PROMPT
 
@@ -70,6 +71,9 @@ async def run_execution_sandbox(state: AgentState) -> Dict[str, Any]:
         conn.close()    
 
 async def run_query_critic(state: AgentState) -> Dict[str, Any]:
+
+    SQL_REGEX = r"```(?:sql|sqlite)?\s*(.*?)```"
+
     current_retries = state.get("retry_count", 0)
     print(f"🕵️‍♂️ (Query Critic) Tentativo di correzione #{current_retries + 1}...")
     
@@ -129,20 +133,50 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
     
     # 4. invoking LLM with Structured Output
     messages = [SystemMessage(content=prompt)]
-    structured_llm = llm_reasoning.with_structured_output(CriticResult).with_retry(stop_after_attempt=3)
     
     try:
-        response: CriticResult = await structured_llm.ainvoke(messages)
+        response = await llm_reasoning.ainvoke(messages)
         
-        print(f" 💡 (Critic Plan): {response.correction_plan}")
-        
-        raw_sql = response.corrected_sql.strip()
-        clean_sql = raw_sql.replace("```sql", "").replace("```sqlite", "").replace("```", "").strip()   
-        print(f"   🔧 (New SQL): {clean_sql}")
-        
-        # 4. update the status
-        return {
-            "generated_sql": response.corrected_sql,
+        llm_output = response.content if hasattr(response, "content") else str(response)
+
+        print("\n🧠 (Critic Reasoning):\n")
+        print(llm_output)
+
+        match = re.search(SQL_REGEX, llm_output, re.DOTALL | re.IGNORECASE)
+
+        if not match:
+
+            return {
+                "retry_count": current_retries + 1,
+                "error": "SQL block not found in critic output"
+            }
+
+        clean_sql = match.group(1).strip()
+
+        print(f"\n   🔧 (New SQL): {clean_sql}")
+        print("   🔍 (AST Validator - Critic) Controllo conformità Tabelle e Colonne...")
+
+        # Costruiamo un dizionario permissivo per il Critic: 
+        # contiene TUTTE le colonne reali delle tabelle selezionate
+        critic_allowed_columns = {}
+        for table in selected_tables:
+            tbl_data = next((t for t in full_schema_list if t.get("table_name", t.get("table")) == table), None)
+            if tbl_data:
+                critic_allowed_columns[table] = tbl_data.get("columns", [])
+
+        # Validiamo la query del Critic
+        final_sql, validation_error = validate_ast_and_format(
+            clean_sql,
+            selected_tables,
+            selected_columns=critic_allowed_columns # Passiamo lo schema completo
+        )
+
+        if validation_error:
+            print(f"   ⚠️ (AST Validator - Critic) Errore rilevato: {validation_error}")
+            # Se fallisce l'AST, settiamo execution_status=False e error_traceback.
+            # Al prossimo ciclo, il grafo salterà la Sandbox e tornerà direttamente qui al Critic!
+            return {
+            "generated_sql": final_sql,
             "retry_count": current_retries + 1,
             # reset the sandbox flags for the next cycle
             "execution_status": None,

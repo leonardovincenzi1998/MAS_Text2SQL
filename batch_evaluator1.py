@@ -330,8 +330,8 @@ async def main():
         print(stat_log)
 
     # Salvataggio JSON Finale
-    with open(args.output_json, "w", encoding="utf-8") as f:
-        json.dump(results_json, f, indent=4, ensure_ascii=False)
+        with open(args.output_json, "w", encoding="utf-8") as f:
+            json.dump(results_json, f, indent=4, ensure_ascii=False)
         
     # ==========================================
     # STATISTICHE GLOBALI (TUTTE LE RUN)

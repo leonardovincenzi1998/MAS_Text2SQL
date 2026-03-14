@@ -339,7 +339,11 @@ async def process_single_table(
 
             # --- PHASE C: LLM DESCRIPTION ---
             user_content = f"--- DDL TABLE ---\n{ddl}\n\n{stats_text}"
-            result = await agent.run(user_content)
+            result = await agent.run(
+                user_content, 
+                model_settings={"temperature": 0.0}
+            )
+            
             description = getattr(result, "data", getattr(result, "output", str(result))).strip()
         
             # --- PHASE D: CREATION OF THE SLIM SCHEMA (No DDL, No Raw Profile) ---

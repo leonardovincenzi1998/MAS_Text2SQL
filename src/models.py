@@ -53,18 +53,7 @@ class AgentState(TypedDict):
     retry_count: int                            # Counter to prevent infinite loops
     data_sample: Optional[List[Dict[str, Any]]] = None # Extracted data sample (if successful)
     entity_hints: str
-
-class SqlGenerationResult(BaseModel):
-    reasoning_steps: List[str] = Field(
-        description="Extremely short explanation on how to build the query (e.g., table joins, aggregations, WHERE clauses)."
-    )
-    sql_query: str = Field(
-        description="The final, executable SQLite query. Strictly SQL, no markdown formatting."
-    )
     
-class CriticResult(BaseModel):
-    correction_plan: str = Field(description="Extremely short reasoning that identifies the error category (from the taxonomy) and briefly explains how to correct it.")
-    corrected_sql: str = Field(description="The new SQL query is correct and ready to be executed, without markdown or comments.")
 # Dependencies injected into the schema validation processes
 @dataclass
 class SchemaDeps:

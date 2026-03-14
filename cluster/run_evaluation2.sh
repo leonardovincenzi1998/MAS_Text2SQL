@@ -91,7 +91,7 @@ echo ""
 echo "🤖 Avvio script di valutazione automatica..."
 echo "--------------------------------------------------"
 
-python3 batch_evaluator1.py --db "$DB_PATH" --golden_set set_domande.txt --output_json metriche_modello_1.json --output_txt report_nodo1.txt
+python3 batch_evaluator2.py --db "$DB_PATH" --golden_set set_domande.txt --output_json metriche_modello2.json --output_txt report_nodo2.txt
 
 # 5. Spegnimento e Cleanup automatico
 echo ""
@@ -100,4 +100,4 @@ echo "🛑 Arresto server vLLM per liberare le risorse..."
 pkill -f "vllm.entrypoints.openai.api_server"
 
 echo "🎉 Finito! Valutazione terminata con successo."
-echo "I risultati sono stati salvati nel file 'metriche_modello_1.json'."
+echo "I risultati sono stati salvati nel file 'metriche_modello2.json'."
