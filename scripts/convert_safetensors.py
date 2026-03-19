@@ -3,7 +3,7 @@ import torch
 from safetensors.torch import save_file
 import sys
 
-# Aggiungi cartella root per importare il config
+# add the root folder to import the configuration
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.config import LOCAL_MODEL_PATH
 

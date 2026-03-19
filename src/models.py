@@ -22,11 +22,12 @@ class ExtractionResult(BaseModel):
     search_keywords: List[str] = Field(default_factory=list, description="SEO-like keywords optimized for DB search (includes singular/plural forms and synonyms).")
     filters: List[str] = Field(default_factory=list, description="Specific conditions requested by the user IN NATURAL LANGUAGE, e.g., 'Il bene deve essere attivo'. DO NOT use SQL syntax.")
 
+#Structured output for the Hybrid Search Agent (Agent 1.5)
 class SearchSchemaInput(BaseModel):
     query: str = Field(description="Entity or keywords to search for.")
     k: int = Field(default=10, description="Number of semantic anchor tables to retrieve.")
     
-# Structured output for the table selection agent
+# Structured output for the table selection agent (Agent 2.0)
 class TableSelectionResult(BaseModel):
     central_entity: str = Field(description="The main table that the query revolves around (e.g., 'BeniMobili').")
     relevant_tables: List[str] = Field(default_factory=list, description="Exact list of selected table names including bridge tables.")

@@ -180,7 +180,7 @@ def resolve_entities_in_db(entities: List[ExtractedEntity], k: int = 3) -> str:
                 bm25_retriever = pickle.load(f)
             bm25_retriever.k = k
             
-            # SOTA Hybrid: Fortemente sbilanciato sul lessicale (80% BM25, 20% Semantico)
+            # SOTA Hybrid Retrieval: 80% BM25, 20% Semantic with Reciprocal Rank Fusion (RRF)
             retriever = EnsembleRetriever(
                 retrievers=[bm25_retriever, chroma_retriever], 
                 weights=[0.8, 0.2]
@@ -199,10 +199,10 @@ def resolve_entities_in_db(entities: List[ExtractedEntity], k: int = 3) -> str:
             if len(ent_value.strip()) < 2:
                 continue
                 
-            # Usiamo invoke sull'EnsembleRetriever per ottenere i documenti fusi e pesati
+            # use invoke on EnsembleRetriever for hybrid retrieval
             results = retriever.invoke(ent_value)
             if results:
-                # Prendiamo i primi K risultati dopo la fusione RRF
+                # take the first K results after the RRF fusion
                 top_results = results[:k]
                 matches = [f"'{res.page_content}' (from {res.metadata.get('table_name')}.{res.metadata.get('column_name')})" for res in top_results]
                 

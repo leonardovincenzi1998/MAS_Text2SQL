@@ -143,11 +143,11 @@ def analyze_columns_smart(
                 # new category logic via ratio check
                 is_text = ("CHAR" in col_type or "TEXT" in col_type)
                 not_pk = col_name not in pk_list
-                valid_rows = total - empty  # Consideriamo solo i record effettivamente valorizzati
+                valid_rows = total - empty  # consider only the records that have actually been assigned a value
                 
                 if is_text and not_pk and valid_rows > 0:
                     try:
-                        # Recupera i 5 valori più frequenti e conta le loro occorrenze
+                        # Retrieve the 5 most frequent values and count their occurrences
                         top_k_query = f"""
                             SELECT {safe_col}, COUNT(*) as freq 
                             FROM "{safe_table}" 
@@ -160,13 +160,13 @@ def analyze_columns_smart(
                         top_values = cursor.fetchall()
                         
                         if top_values:
-                            # Somma delle frequenze dei top 5
+                            # Sum of the frequencies of the top 5 values
                             top5_freq_sum = sum(r['freq'] for r in top_values)
                             
-                            # Calcola la percentuale di copertura
+                            # Calculate the coverage percentage
                             coverage_ratio = top5_freq_sum / valid_rows
                             
-                            # Se i primi 5 valori coprono almeno l'80% dei dati, è una colonna categorica
+                            # If the first 5 values account for at least 80% of the data, it is a categorical column
                             if coverage_ratio >= 0.80:
                                 vals = [str(r[0]) for r in top_values]
                                 vals_str = ", ".join(vals)
@@ -174,7 +174,6 @@ def analyze_columns_smart(
                                 categorical_hints.append(f"- Colonna '{col_name}' (Top {len(vals)} coprono {coverage_pct}%): [{vals_str}]")
                     except Exception as e:
                         pass
-                # ------------------------------------------------------------------
             else:
                 if not is_structural:
                     dropped_columns.append(col_name)
@@ -252,8 +251,8 @@ def get_global_pks(db_path: str, tables: List[str]) -> Dict[str, str]:
         safe_table = t.replace('"', '""')
         cursor.execute(f'PRAGMA table_info("{safe_table}")')
         for row in cursor.fetchall():
-            if row[5] > 0:  # row[5] è il flag 'pk'
-                global_pks[row[1]] = t  # row[1] è il nome della colonna
+            if row[5] > 0:  # row[5] is the “pk” flag
+                global_pks[row[1]] = t  # row[1] is the name of the column
     conn.close()
     return global_pks
 
@@ -537,18 +536,18 @@ async def main():
     try:
         val_docs_for_bm25 = []
         offset = 0
-        batch_size = 5000  # Dimensione sicura per evitare l'errore SQLite
+        batch_size = 5000  # Safe size to avoid the SQLite error
         
-        # Estrazione a blocchi (Pagination)
+        # Block-based retrieval (Pagination)
         while True:
-            # Recupera un batch di dati usando limit e offset
+            # Retrieve a batch of data using `limit` and `offset`
             batch_data = value_collection.get(limit=batch_size, offset=offset)
             
             docs = batch_data.get('documents', [])
             metas = batch_data.get('metadatas', [])
             
             if not docs:
-                break  # Nessun altro documento da recuperare, usciamo dal ciclo
+                break  # No further documents to retrieve; exit the loop
                 
             for doc_text, meta in zip(docs, metas):
                 val_docs_for_bm25.append(Document(page_content=doc_text, metadata=meta))
@@ -557,12 +556,12 @@ async def main():
 
         print(f"   📥 Recuperati con successo {len(val_docs_for_bm25)} valori per l'indice BM25.")
 
-        # --- PARTE CHE MANCAVA (Creazione e Salvataggio) ---
+        # Creating and saving the BM25 index for the values
         if val_docs_for_bm25:
-            # Addestra l'algoritmo BM25 sui documenti testuali estratti
+            # Train the BM25 algorithm on the extracted text documents
             bm25_val_retriever = BM25Retriever.from_documents(val_docs_for_bm25)
             
-            # Salva il modello su disco
+            # Save the template to disk
             with open(BM25_VALUES_PATH, 'wb') as f:
                 pickle.dump(bm25_val_retriever, f)
             print("✅ Indice BM25 dei valori completato e salvato su disco.")

@@ -11,12 +11,10 @@ from sqlglot.expressions import Table, Column
 from langchain_core.messages import HumanMessage
 from src.config import DEFAULT_DB_PATH
 
-# Disabilita i warning di pydantic per un log più pulito
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
 
-# ==========================================
-# FUNZIONI DI METRICA (Da batch_evaluator2.py)
-# ==========================================
+# METRICS FUNCTIONS (From batch_evaluator2.py)
+
 def extract_tables_from_sql(sql: str) -> set:
     try:
         parsed = sqlglot.parse_one(sql, read="sqlite")
@@ -76,9 +74,7 @@ def extract_columns_from_sql(sql: str) -> set:
         matches = re.findall(r'\b([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\b', sql_no_strings)
         return set(f"{t}.{c}" for t, c in matches if t not in ("count", "sum", "avg", "max", "min"))
 
-# ==========================================
-# MAIN INTERATTIVO
-# ==========================================
+# interactive main
 async def main():
     parser = argparse.ArgumentParser(description="Run the Text-to-SQL agent in INTERACTIVE mode")
     parser.add_argument("--db", type=str, default=DEFAULT_DB_PATH, help="Path to the SQLite database file")
@@ -118,7 +114,7 @@ async def main():
             if not user_query:
                 continue
                 
-            # Richiesta opzionale della Golden SQL per le metriche
+            # Optional Golden SQL request for metrics
             print("   (Opzionale) Se vuoi calcolare le metriche, inserisci la Golden SQL.")
             print("   💡 Puoi incollare su più righe. La lettura si ferma quando trova un ';' oppure se premi Invio su una riga vuota.")
             print("🥇 Golden SQL (premi solo Invio per saltare): ")
@@ -126,13 +122,13 @@ async def main():
             golden_sql_lines = []
             while True:
                 line = input()
-                # Se preme Invio subito senza aver scritto nulla, salta le metriche
+                # If press Enter straight away without typing anything, it skips the metrics
                 if not line.strip() and len(golden_sql_lines) == 0:
                     break
                 
                 golden_sql_lines.append(line)
                 
-                # Ferma la lettura se c'è un punto e virgola, o se invia una riga vuota dopo aver incollato
+                # Stop reading if there is a semicolon, or if an empty line is sent after pasting
                 if ';' in line or (not line.strip() and len(golden_sql_lines) > 0):
                     break
                     
@@ -185,9 +181,7 @@ async def main():
                 print(f"\n✍️  [Agente 3] SQL GENERATO:")
                 print(generated_sql)
 
-            # ==========================================
-            # CALCOLO E STAMPA METRICHE SOTA
-            # ==========================================
+            # CALCULATION AND PRINTING OF SOTA DIMENSIONS                     
             execution_status = final_state.get("execution_status", False)
             print("\n📊 --- METRICHE DI ESECUZIONE ---")
             print(f"Syntax Accuracy (Eseguibile senza errori): {'✅ Passata' if execution_status else '❌ Fallita'}")
@@ -196,12 +190,12 @@ async def main():
                 selected_tables = final_state.get("selected_tables", [])
                 selected_cols_dict = final_state.get("selected_columns") or {}
                 
-                # Calcolo EX-Match
+                # Calculating EX-Match
                 ex_match = False
                 if execution_status:
                     ex_match = compare_execution_results(db_path, golden_sql, generated_sql)
                 
-                # Calcolo Table Recall & Precision
+                # Calculating Table Recall & Precision
                 golden_tables = extract_tables_from_sql(golden_sql)
                 golden_tables_lower = set([t.lower() for t in golden_tables])
                 selected_tables_lower = set([t.lower() for t in selected_tables])
@@ -210,7 +204,7 @@ async def main():
                 table_recall = tp_tab / len(golden_tables) if golden_tables else 0.0
                 table_precision = tp_tab / len(selected_tables_lower) if selected_tables_lower else 0.0
                 
-                # Calcolo Column Recall & Precision
+                # Calculating Column Recall & Precision
                 selected_cols_fq = set()
                 for t_name, cols in selected_cols_dict.items():
                     for col in cols:
@@ -221,7 +215,7 @@ async def main():
                 col_recall = tp_col / len(golden_cols_fq) if golden_cols_fq else 0.0
                 col_precision = tp_col / len(selected_cols_fq) if selected_cols_fq else 0.0
                 
-                # Stampa a video (verrà catturata automaticamente nel file log tramite "tee" in bash)
+                # Screen output (will be automatically captured in the log file via ‘tee’ in bash)
                 print(f"EX-Match (Accuratezza Logica):           {'✅ Passato (1.0)' if ex_match else '❌ Fallito (0.0)'}")
                 print(f"Table Recall:                            {table_recall:.2f}")
                 print(f"Table Precision:                         {table_precision:.2f}")

@@ -10,7 +10,6 @@ import gc
 import statistics
 from sqlglot.expressions import Table, Column
 
-# Disabilita i warning di pydantic per un log più pulito
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
 
 from langchain_core.messages import HumanMessage
@@ -18,8 +17,8 @@ from src.config import DEFAULT_DB_PATH
 
 def parse_golden_set(filepath: str) -> list:
     """
-    Estrae le domande e le query SQL attese dal file di test.
-    Cerca il pattern: numero. "Domanda" seguito dalla query SQL.
+    Extracts the expected questions and SQL queries from the test file.
+    Searches for the pattern: number. ‘Question’ followed by the SQL query.
     """
     parsed_data = []
     if not os.path.exists(filepath):
@@ -29,6 +28,7 @@ def parse_golden_set(filepath: str) -> list:
     with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
 
+    # Regex to capture: 1. ID, 2. Question string (inside quotes), 3. SQL query
     pattern = r'(\d+)\.\s+"([^"]+)"\s*\n(.*?)(?=\n\d+\.\s+"|\Z)'
     matches = re.finditer(pattern, content, re.DOTALL)
     
@@ -42,22 +42,29 @@ def parse_golden_set(filepath: str) -> list:
     return parsed_data
 
 def extract_tables_from_sql(sql: str) -> set:
-    """ Estrae in modo preciso i nomi delle tabelle usando l'AST di sqlglot. """
+    """ Accurately extracts table names using sqlglot's Abstract Syntax Tree (AST). 
+    If AST parsing fails, it falls back to a Regex approach. """
     try:
         parsed = sqlglot.parse_one(sql, read="sqlite")
         return set(t.name.lower() for t in parsed.find_all(Table))
     except Exception:
+        # Fallback for invalid SQL syntax: extract words after FROM or JOIN
         sql_clean = sql.replace('\n', ' ')
         tables = re.findall(r'(?:FROM|JOIN)\s+([a-zA-Z0-9_]+)', sql_clean, re.IGNORECASE)
         return set([t.lower() for t in tables])
 
 def compare_execution_results(db_path: str, golden_sql: str, generated_sql: str) -> bool:
-    """ SOTA Metric (EX-Match): Esegue entrambe le query e confronta i set di risultati estratti. """
+    """ 
+    SOTA Metric (EX-Match - Execution Match): 
+    Executes both the golden query and the generated query against the database 
+    and compares the resulting data sets. This is much more robust than exact string matching.
+    """
     if not generated_sql or not golden_sql:
         return False
         
     conn = None
     try:
+        # Connect in read-only mode to prevent accidental data modification during evaluation
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         cursor = conn.cursor()
         
@@ -67,24 +74,31 @@ def compare_execution_results(db_path: str, golden_sql: str, generated_sql: str)
         cursor.execute(generated_sql)
         generated_res = cursor.fetchall()
         
+        # If the golden query explicitly requires an order, compare lists strictly.
+        # Otherwise, sort both result sets before comparing to ignore row order differences.
         if "ORDER BY" in golden_sql.upper():
             return golden_res == generated_res
         else:
             return sorted(golden_res) == sorted(generated_res)
             
     except Exception:
+        # If execution fails (e.g., syntax error or hallucinated column), it's a mismatch
         return False
     finally:
         if conn:
             conn.close()
 
 def extract_columns_from_sql(sql: str) -> set:
-    """ Estrae i nomi di colonna in formato 'tabella.colonna' usando l'AST di sqlglot. """
+    """ 
+    Extracts column names in 'table.column' format using sqlglot's AST. 
+    Handles table aliases to map columns back to their real table names.
+    """
     try:
         parsed = sqlglot.parse_one(sql, read="sqlite")
         
         alias_map = {}
         table_names = []
+        # Build a mapping of aliases to real table names
         for t in parsed.find_all(Table):
             t_name = t.name.lower()
             table_names.append(t_name)
@@ -96,9 +110,11 @@ def extract_columns_from_sql(sql: str) -> set:
         for c in parsed.find_all(Column):
             col_name = c.name.lower()
             if c.table:
+                # Resolve the alias to the actual table name
                 real_table = alias_map.get(c.table.lower(), c.table.lower())
                 columns.add(f"{real_table}.{col_name}")
             else:
+                # If no table prefix is used, guess the table if only one is present
                 if len(set(table_names)) == 1:
                     columns.add(f"{table_names[0]}.{col_name}")
                 else:
@@ -106,12 +122,14 @@ def extract_columns_from_sql(sql: str) -> set:
         return columns
         
     except Exception:
+        # Regex fallback: strips strings to avoid matching keywords inside text, 
+        # then looks for 'table.column' patterns, excluding common aggregate functions.
         sql_no_strings = re.sub(r"'.*?'", "", sql.lower())
         matches = re.findall(r'\b([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\b', sql_no_strings)
         return set(f"{t}.{c}" for t, c in matches if t not in ("count", "sum", "avg", "max", "min"))
 
 def calc_stats(data: list) -> tuple:
-    """Calcola (Media, Deviazione Standard) per una lista di numeri."""
+    """Calculates (Mean, Standard Deviation) for a list of numbers."""
     if not data:
         return 0.0, 0.0
     m = statistics.mean(data)
@@ -119,20 +137,21 @@ def calc_stats(data: list) -> tuple:
     return m, s
 
 def write_to_report(filepath: str, content: str):
-    """Scrive in append sul file di testo di report."""
+    """Appends content to the human-readable text report file."""
     with open(filepath, "a", encoding="utf-8") as f:
         f.write(content + "\n")
 
 async def main():
+    # Setup Command Line Arguments for the evaluation script
     parser = argparse.ArgumentParser(description="Run Text-to-SQL agent in BATCH mode for Evaluation")
     parser.add_argument("--db", type=str, default=DEFAULT_DB_PATH, help="Path to the SQLite database file")
     parser.add_argument("--golden_set", type=str, default="set_domande.txt", help="Path to the Golden Set txt file")
     parser.add_argument("--output_json", type=str, default="metriche_sota.json", help="Path for the output JSON results")
     parser.add_argument("--output_txt", type=str, default="report_statistico1.txt", help="Path for the human-readable text report")
-    parser.add_argument("--runs", type=int, default=5, help="Number of times to run EACH question")
+    parser.add_argument("--runs", type=int, default=2, help="Number of times to run EACH question")
     args = parser.parse_args()
 
-    # Importa il workflow solo dopo aver settato le variabili d'ambiente
+    # Import the LangGraph workflow here to ensure environment variables are loaded first
     from src.graph import app 
 
     print("="*70)
@@ -146,7 +165,7 @@ async def main():
         
     print(f"Trovate {len(eval_dataset)} domande nel file. Inizio elaborazione...\n")
     
-    # Inizializza il file TXT sovrascrivendolo
+    # Initialize the TXT report file by overwriting it
     with open(args.output_txt, "w", encoding="utf-8") as f:
         f.write("="*80 + "\n")
         f.write(" REPORT STATISTICO VALUTAZIONE TEXT-TO-SQL\n")
@@ -154,7 +173,7 @@ async def main():
         f.write("="*80 + "\n\n")
 
     results_json = []
-    all_valid_runs_flat = [] # Per le metriche globali finali
+    all_valid_runs_flat = [] # Used at the end to compute global aggregated metrics
 
     for item in eval_dataset:
         q_id = item["id"]
@@ -167,7 +186,7 @@ async def main():
         max_domanda_retries = 2
         question_runs_data = []
 
-        # LOOP DELLE 15 ITERAZIONI
+        # LOOP: Run each question multiple times to get statistically significant results (mean + std dev)
         for run_idx in range(args.runs):
             print(f"   🔄 Esecuzione {run_idx + 1}/{args.runs}...")
             
@@ -184,10 +203,12 @@ async def main():
                 "error": None
             }
 
+            # Retry loop to handle transient LLM API errors or graph failures
             for attempt in range(max_domanda_retries):
                 current_state = None
                 final_state = None
                 try:
+                    # Initialize the agent state for this specific run
                     current_state = {
                             "messages": [HumanMessage(content=user_query)],
                             "user_query": user_query,
@@ -197,27 +218,30 @@ async def main():
                             "retry_count": 0
                         }
                     
-                    # Timeout globale di 4 minuti per evitare blocchi infiniti
+                    # Global timeout of 4 minutes to prevent the LangGraph agent from looping infinitely
                     final_state = await asyncio.wait_for(app.ainvoke(current_state), timeout=240.0)
                     
                     errore_fatale = final_state.get("error") or final_state.get("error_traceback")
                     esecuzione_ok = final_state.get("execution_status")
                     
+                    # If the workflow failed and we still have retries left, loop again
                     if errore_fatale and not esecuzione_ok and attempt < max_domanda_retries - 1:
                         print(f"      ⚠️ Errore (Tentativo {attempt + 1}). Ritento...")
                         continue
-
+                    
+                    # Extract the final outputs from the agent's state
                     generated_sql = final_state.get("generated_sql")
                     execution_status = final_state.get("execution_status", False)
                     selected_tables = final_state.get("selected_tables", [])
                     retry_count = final_state.get("retry_count", 0)
                     selected_cols_dict = final_state.get("selected_columns") or {}
                     
-                    # --- CALCOLO METRICHE SOTA ---
+                    # --- CALCULATE SOTA METRICS ---
                     ex_match = False
                     if execution_status:
                         ex_match = compare_execution_results(args.db, golden_sql, generated_sql)
                     
+                    # Evaluate Table Selection accuracy (Schema Linking)
                     golden_tables = extract_tables_from_sql(golden_sql)
                     golden_tables_lower = set([t.lower() for t in golden_tables])
                     selected_tables_lower = set([t.lower() for t in selected_tables])
@@ -226,6 +250,7 @@ async def main():
                     table_recall = tp_tab / len(golden_tables) if golden_tables else 0.0
                     table_precision = tp_tab / len(selected_tables_lower) if selected_tables_lower else 0.0
                     
+                    # Evaluate Column Selection accuracy (Schema Linking)
                     selected_cols_fq = set()
                     for t_name, cols in selected_cols_dict.items():
                         for col in cols:
@@ -236,7 +261,7 @@ async def main():
                     col_recall = tp_col / len(golden_cols_fq) if golden_cols_fq else 0.0
                     col_precision = tp_col / len(selected_cols_fq) if selected_cols_fq else 0.0
 
-                    # Salva risultati
+                    # Save the computed metrics into the run result dictionary
                     run_result.update({
                         "generated_sql": generated_sql,
                         "execution_status": execution_status,
@@ -249,7 +274,7 @@ async def main():
                         "error": errore_fatale
                     })
 
-                    break # Successo, esci dal ciclo dei retries (attempt)
+                    break
 
                 except asyncio.TimeoutError:
                     if attempt < max_domanda_retries - 1:
@@ -262,19 +287,18 @@ async def main():
                     run_result["error"] = str(e)
                     break
                 finally:
-                    # ✅ QUESTA È LA GARANZIA ASSOLUTA DI PULIZIA RAM
-                    # Viene eseguito sempre, anche dopo break o continue
+                    # Ensures state variables are deleted to prevent OOM errors over many iterations
                     if current_state is not None:
                         del current_state
                     if final_state is not None:
                         del final_state
 
-            # Aggiungi la run alla lista della domanda
+            # Append the run to the question's data
             question_runs_data.append(run_result)
             if run_result["error"] != "Timeout":
                 all_valid_runs_flat.append(run_result)
 
-            # Scrivi i dettagli della Run sul File TXT
+            # Write the Run details to the TXT file
             status_ico = "🏆" if run_result['ex_match'] else ("✅" if run_result['execution_status'] else "❌")
             run_log = f"  [Run {run_idx + 1}] {status_ico}\n"
             run_log += f"    Gen SQL: {run_result['generated_sql']}\n"
@@ -285,13 +309,12 @@ async def main():
             write_to_report(args.output_txt, run_log)
 
             print(run_log)
-            # Pulizia e raffreddamento per ogni Run per evitare sovraccarico GPU
+            # Garbage collection and cooldown to avoid overloading the API/GPU
             gc.collect() 
             await asyncio.sleep(2.0)
 
-        # ==========================================
-        # STATISTICHE DELLA SINGOLA DOMANDA
-        # ==========================================
+        # SINGLE QUESTION STATISTICS AGGREGATION
+        # Filter out timeouts when computing the statistical mean and std dev
         ex_matches = [1.0 if r["ex_match"] else 0.0 for r in question_runs_data if not r["error"] == "Timeout"]
         exec_status = [1.0 if r["execution_status"] else 0.0 for r in question_runs_data if not r["error"] == "Timeout"]
         tab_recalls = [r["table_recall"] for r in question_runs_data if not r["error"] == "Timeout"]
@@ -308,7 +331,7 @@ async def main():
             "col_precision": calc_stats(col_precs)
         }
 
-        # Salva in JSON
+        # Save to JSON structure
         results_json.append({
             "id": q_id,
             "question": user_query,
@@ -317,7 +340,7 @@ async def main():
             "statistics": q_stats
         })
 
-        # Scrivi statistiche domanda su TXT
+        # Write question statistics to the TXT report
         stat_log = f"\n  📊 STATISTICHE DOMANDA {q_id}:\n"
         stat_log += f"    - EX-Match:        Media {q_stats['ex_match'][0]*100:.1f}% (σ = {q_stats['ex_match'][1]*100:.1f}%)\n"
         stat_log += f"    - Syntax Accuracy: Media {q_stats['execution_status'][0]*100:.1f}% (σ = {q_stats['execution_status'][1]*100:.1f}%)\n"
@@ -329,13 +352,11 @@ async def main():
         
         print(stat_log)
 
-    # Salvataggio JSON Finale
+    # Save Final JSON Results
         with open(args.output_json, "w", encoding="utf-8") as f:
             json.dump(results_json, f, indent=4, ensure_ascii=False)
         
-    # ==========================================
-    # STATISTICHE GLOBALI (TUTTE LE RUN)
-    # ==========================================
+    # GLOBAL STATISTICS AGGREGATION (across all questions and runs)
     if all_valid_runs_flat:
         gl_ex_matches = [1.0 if r["ex_match"] else 0.0 for r in all_valid_runs_flat]
         gl_exec_status = [1.0 if r["execution_status"] else 0.0 for r in all_valid_runs_flat]

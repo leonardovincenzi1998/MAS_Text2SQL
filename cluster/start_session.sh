@@ -70,15 +70,6 @@ else
         --gpu-memory-utilization 0.75 \
         --max-model-len 32768 \
         --disable-log-requests > vllm_server.log 2>&1 &
-    # python3 -m vllm.entrypoints.openai.api_server \
-    # --model hugging-quants/Meta-Llama-3.3-70B-Instruct-AWQ-INT4 \
-    # --quantization awq \
-    # --dtype auto \
-    # --api-key EMPTY \
-    # --port 8000 \
-    # --gpu-memory-utilization 0.95 \
-    # --max-model-len 16384 \
-    # --disable-log-requests > vllm_server.log 2>&1 &
     SERVER_PID=$!
     
     echo "⏳ Attesa avvio server (Timeout 300s)..."

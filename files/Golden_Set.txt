@@ -8,7 +8,6 @@ Tabelle Necessarie: Edifici
 
 Colonne Necessarie: Edifici.Denominazione, Edifici.Comune, Edifici.Provincia, Edifici.IsAttivo
 
-SQL
 SELECT Denominazione, Comune 
 FROM Edifici 
 WHERE Provincia = 'RO' AND IsAttivo = 1;
@@ -282,20 +281,6 @@ FROM Categorie c
 JOIN Speci s ON c.IdCategoria = s.IdCategoria
 GROUP BY c.IdCategoria, c.Denominazione;
 
-Domanda 19 (Medium)
-
-"Mostra la denominazione di ogni categoria principale e quante 'specie' diverse vi appartengono."
-
-Contesto Utente: L'amministratore sta analizzando l'albero di classificazione di primo livello per capire come sono raggruppate le anagrafiche. È un classico raggruppamento genitore-figlio.
-
-Tabelle Necessarie: Categorie, Speci
-
-Colonne Necessarie: Categorie.IdCategoria, Categorie.Denominazione, Speci.IdCategoria, Speci.IdSpecie
-
-SELECT c.Denominazione, COUNT(s.IdSpecie) AS NumeroSpecie
-FROM Categorie c
-JOIN Speci s ON c.IdCategoria = s.IdCategoria
-GROUP BY c.IdCategoria, c.Denominazione;
 
 Domanda 20 (Medium)
 

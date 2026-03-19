@@ -90,7 +90,7 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
     full_schema_list = state.get("parsed_schema", [])
 
     critic_ddl_context = ""
-    # 1. DDL reconstruction
+    # DDL reconstruction
     for table in selected_tables:
         raw_ddl = db_manager.get_table_ddl(table)
         tbl_data = next((t for t in full_schema_list if t.get("table_name", t.get("table")) == table), None)
@@ -106,7 +106,8 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
             critic_ddl_context += f"-- Schema for {table}:\n{raw_ddl}\n\n"
     
     extraction = state.get("extraction_result")
-    entity_hints = state.get("entity_hints", "Nessun hint disponibile.") # RECUPERA GLI HINTS
+    # load hints directly from state
+    entity_hints = state.get("entity_hints", "Nessun hint disponibile.") 
     
     extracted_info = "No extraction available."
     if extraction:
@@ -114,7 +115,7 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         if hasattr(extraction, 'entities') and extraction.entities:
             entities_str = ", ".join([f"[{e.category}: '{e.value}']" for e in extraction.entities])
             
-        # INIETTA GLI HINTS NELL'INFO PER IL CRITIC
+        # include the hints in the Critic's prompt
         extracted_info = (
             f"Intent: {getattr(extraction, 'intent', 'Non specificato')}\n"
             f"Entities: {entities_str}\n"
@@ -156,15 +157,15 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
         print(f"\n   🔧 (New SQL): {clean_sql}")
         print("   🔍 (AST Validator - Critic) Controllo conformità Tabelle e Colonne...")
 
-        # Costruiamo un dizionario permissivo per il Critic: 
-        # contiene TUTTE le colonne reali delle tabelle selezionate
+        # Build a permissive dictionary for the Critic: 
+        # contains ALL the real columns of the selected tables, ignoring the Column Selector's output.
         critic_allowed_columns = {}
         for table in selected_tables:
             tbl_data = next((t for t in full_schema_list if t.get("table_name", t.get("table")) == table), None)
             if tbl_data:
                 critic_allowed_columns[table] = tbl_data.get("columns", [])
 
-        # Validiamo la query del Critic
+        # validate Critic's query 
         final_sql, validation_error = validate_ast_and_format(
             clean_sql,
             selected_tables,
@@ -173,8 +174,8 @@ async def run_query_critic(state: AgentState) -> Dict[str, Any]:
 
         if validation_error:
             print(f"   ⚠️ (AST Validator - Critic) Errore rilevato: {validation_error}")
-            # Se fallisce l'AST, settiamo execution_status=False e error_traceback.
-            # Al prossimo ciclo, il grafo salterà la Sandbox e tornerà direttamente qui al Critic!
+            # if AST fails, we set execution_status=False and error_traceback.
+            # On the next cycle, the graph will skip the Sandbox and return directly to the Critic!
             return {
             "generated_sql": final_sql,
             "retry_count": current_retries + 1,

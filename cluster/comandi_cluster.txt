@@ -95,19 +95,10 @@ mkdir -p /scratch.hpc/leonardo.vincenzi/mas_text2sql/local_models/bge-m3
 huggingface-cli download BAAI/bge-m3 --local-dir /scratch.hpc/leonardo.vincenzi/mas_text2sql/local_models/bge-m3 --local-dir-use-symlinks False
 python /scratch.hpc/leonardo.vincenzi/mas_text2sql/src/utils.py
 
-#Comandi per scaricare nuovo modello Llama 3.3
-# 1. Attiva il tuo ambiente virtuale
-source venv/bin/activate
-
-# 2. Imposta la variabile d'ambiente per scaricare il modello nel posto giusto
-export HF_HOME=/scratch.hpc/leonardo.vincenzi/hf_cache
-
-# 3. Scarica i pesi quantizzati di Llama 3.3 70B
-huggingface-cli download hugging-quants/Meta-Llama-3.3-70B-Instruct-AWQ-INT4
-
 #Quando crasha ma non esco da srun, per riavviare Server vLLM:
 pkill -f vllm
 nvidia-smi
+pkill -9 -f vllm
 pkill -9 -f ray
 pkill -9 -f python
 
@@ -131,26 +122,5 @@ Decommentare ""from src.config import BM25_PATH"" e codice infondo a main()
 Passo 4: Modificare il Tool di Ricerca (src/tools.py)
 Decommentare ""from src.config import CHROMA_PATH, COLLECTION_NAME #, BM25_PATH"" e codice in search_schema_tool
 
-
-
-
-Di seguito la risposta e le informazioni da te richieste per creare il Golden State:
-
--Step 1: Estrai il DDL (Data Definition Language): trovi il mio DDL nel file allegato "db_schema.sql"
-
-Step 2: Fornisci un po' di "Sample Data" COMANDO: in questo caso se guardi il mio codice non ho escluso le colonne inutili al mio Agente sql Generator, è una miglioria da sviluppare per renderlo più preciso, visto che le rilevo nell'ingestion
-I dati sample li trovi all'interno del file "db_sample.txt"
-
--Step 3: 
---Di cosa tratta il database? Il database è una porzione di un database ampio relativo all'inventariazione dei beni mobili e immobili e al suo applicativo che lo gestisce. Questa porzione di database contabile fa riferimento alll'inventario dei BeniMobili posseduti da un Comune. All'interno ci sono informazioni riguardo alla tipologia del bene (Specie), al suo ammortamento nel tempo (Ammortamenti), in quale edificio si trova (Edifici, Locali), il valore e il riferimento all'ordine di acquisto (Valori), informazioni inerenti all'aspetto contabile (Mastri, Patrimonio), lo stato del bene e la sua conservazione (Aspetti, Conservazione), informazioni sulla sua etichetattura, in più ha molte colonne "sporche" che non contengono molta informazione, sono per lo più colonne bool (0,1) che iniziano con "is" (non tutte sono inutili) e che servono all'applicativo che si serve del database, ci sono molte colonne null che come hai visto nell'ingestion cerco di escludere
---Chi farà queste domande al tuo sistema? L'idea è che l'interlocutore al mio sistema sia una persona che non conosce il linguaggio sql e non può quindi creare anche query semplici in modo autonomo, potremmo definirli come amministratori dell'inventario che consultano il database direttamente senza dover richiedere query ai propri colleghi tecnici.
-
-Step 4: Definisci la Complessità Desiderata
-Easy: Singola tabella, condizioni WHERE semplici.
-Medium: 1-2 JOIN, funzioni di aggregazione (COUNT, SUM), GROUP BY.
-Hard: Multipli JOIN, Subqueries annidate
-
-
-
-
+Comando per accedere a job attivo-interattivo da altro terminale
 srun --jobid=33546 --overlap --pty /bin/bash

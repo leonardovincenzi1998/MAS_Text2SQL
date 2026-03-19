@@ -39,7 +39,7 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 2. **Entity & Attribute Mapping (KEY-VALUE FORMAT)**:
    - Identify textual entities and format them as `{{"category": "...", "value": "..."}}`.
    - GOLDEN RULE: Extract as entities categorical text states if they represent specific domain classifications (e.g., 'BUONO', 'FUORI USO', 'INDISPONIBILE', 'DI SERIE') as these require an exact text match, but You MUST exclude them if they're used as illustrative examples in the user's query (e.g., words inside parentheses or after 'ad esempio', 'come').
-   - GROUPING RULE: Extract only specific explicit values (e.g., “Roma,” “CED,” “Armadio,” “SCUOLA ELEMENTARE”). Ignore generic grouping terms (e.g., “Area,” “Edificio,” “Categoria,”, "Locale") as entities when the user asks “per ogni...” or “raggruppamento...”. 
+   - GROUPING RULE: Extract only specific explicit values (e.g., “Roma,” “Armadio”). Ignore generic grouping terms as entities when the user asks “per ogni...” or “raggruppamento...”. 
    - Enter Boolean status, dates, and numbers conditions EXCLUSIVELY in the "filters" list.
    - The terms "beni" or "beni mobili" represent the core domain of the database. NEVER extract them as key-value pairs in the "entities" list.
    
@@ -52,8 +52,8 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
    4. **Filters Formulation (NATURAL LANGUAGE)**:
    - Extract the exact condition IN NATURAL LANGUAGE (e.g., "La città deve essere Roma", "Il bene deve essere attivo", "L'edificio deve essere attivo"). 
    - If no filters are requested, output an empty list [].
-   - When writing natural language conditions in the "filters" list, ALWAYS use the exact grammatical subject mentioned by the user (e.g., "L'edificio deve essere attivo", "Il locale deve essere attivo", "I beni mobili devono avere un valore > 0"). Do not automatically use "beni mobili" as the subject of the filter if the user was actually referring to the status of a building or a room.
-   - Domain assumption: verbs used in the present tense, such as ‘ospita’, ‘si trova’ or ‘assegnato,’ ALWAYS imply the CURRENT situation, requiring the addition of the temporal condition in the filters: ‘The location or assignment must be the current one.’
+   - When writing natural language conditions in the "filters" list, ALWAYS use the exact grammatical subject mentioned by the user (e.g., "L'edificio deve essere attivo", "Il locale deve essere attivo", "I beni mobili devono avere un valore > 0"). Do not automatically use "beni mobili" as the subject of the filter if the user was actually referring to the status of other things.
+   - Domain assumption: verbs used in the present tense, such as 'ospita', 'si trova' or 'assegnato,' ALWAYS imply the CURRENT situation, requiring the addition of the temporal condition in the filters: 'The location or assignment must be the current one.'
 
    ### JSON SCHEMA 
 {{
@@ -67,7 +67,7 @@ Please note: The database contains various Boolean flags (0/1). You must use a f
 
 #####FEW-SHOT EXAMPLES#####
 
-Input: "Quanti beni mobili attivi e non eliminati che abbiamo inserito nel 2019?"
+Input: "Quanti beni mobili attivi e non eliminati abbiamo inserito nel 2019?"
 
 {{
   "intent": "Conteggio beni mobili attivi e non eliminati inseriti nel 2019",
@@ -76,30 +76,29 @@ Input: "Quanti beni mobili attivi e non eliminati che abbiamo inserito nel 2019?
   "filters": ["I beni mobili devono essere attivi", "I beni mobili non devono essere eliminati", "L'anno di inserimento deve essere il 2019"]
 }}
 
-Input: "Mostrami l'elenco dei beni situati nel plesso SCUOLA ELEMENTARE che hanno come condizione giuridica INDISPONIBILE"
+Input: "Mostrami l'elenco dei beni situati nel plesso Ufficio del turismo che hanno come condizione giuridica INDISPONIBILE"
 
 {{
-  "intent": "Elenco beni nella Scuola Elementare con condizione giuridica Indisponibile",
+  "intent": "Elenco beni nell'Ufficio del turismo con condizione giuridica Indisponibile",
   "entities": [
-    {{"category": "Edificio", "value": "SCUOLA ELEMENTARE"}},
+    {{"category": "Edificio", "value": "Ufficio del turismo"}},
     {{"category": "CondizioneGiuridica", "value": "INDISPONIBILE"}}
   ],
   "search_keywords": ["bene", "beni", "plesso", "plessi", "scuola", "scuole", "elementare", "condizione", "condizioni", "giuridica", "giuridiche"],
-  "filters": ["L'edificio deve essere 'SCUOLA ELEMENTARE'", "La condizione giuridica deve essere 'INDISPONIBILE'", ]
+  "filters": ["L'edificio deve essere 'Ufficio del turismo'", "La condizione giuridica deve essere 'INDISPONIBILE'", ]
 }}
 
-Input: "In quale locale si trova l'ARMADIO IN METALLO ALTO ANTE SCORR., GRIGIO che appartiene al centro di costo CED?"
+Input: "In quale locale si trova la scrivania in legno che appartiene al centro di costo CED?"
 
 {{
-  "intent": "Ricerca locale per specifico armadio in metallo assegnato al CED",
+  "intent": "Ricerca locale per specifico scrivania in legno assegnato al CED",
   "entities": [
-    {{"category": "Oggetto", "value": "ARMADIO IN METALLO ALTO ANTE SCORR., GRIGIO"}},
+    {{"category": "Oggetto", "value": "scrivanie in legno"}},
     {{"category": "CentroDiCosto", "value": "CED"}}
   ],
   "search_keywords": ["locale", "locali", "centro", "centri", "costo", "costi"],
-  "filters": ["La descrizione del bene mobile deve essere 'ARMADIO IN METALLO ALTO ANTE SCORR., GRIGIO'", "Il centro di costo associato deve essere 'CED'", "La collocazione nel locale deve essere quella attuale", "L'assegnazione al centro di costo deve essere quella attuale"]
+  "filters": ["La descrizione del bene mobile deve essere 'scrivania in legno'", "Il centro di costo associato deve essere 'CED'", "La collocazione nel locale deve essere quella attuale", "L'assegnazione al centro di costo deve essere quella attuale"]
 }}
-
 """
 
 # Prompt per src/agent.py -> Table Selector
@@ -118,11 +117,10 @@ The database is part of a management system for the inventory of a municipality'
 - LANGUAGE FOR TABLE NAMES: Must strictly match the exact names provided in the schema (case-sensitive).
 
 ### SELECTION LOGIC & CRITERIA
-1. **Semantic Concept Matching**: Focus on finding the tables that contain the core entities and attributes requested by the user. If the user asks for an "address", look for tables with "Via", "Civico", "Comune" (e.g., `Edifici`). 
-2. **Foreign Key Chaining (CRITICAL)**: Bridge tables (e.g., `MobiliLocali`, `MobiliSottoSpeci`) are never enough to get textual details. You MUST follow the `[FK->Table.Column]` annotations to reach the final descriptive table (e.g., `Locali`, `Speci`).
+1. **Foreign Key Chaining (CRITICAL)**: Bridge tables are never enough to get textual details. You MUST follow the `[FK->Table.Column]` annotations to reach the final descriptive table (e.g., `Locali`, `Speci`).
 3. **The ID Rule**: Columns starting with `Id` (e.g., `IdSottoSpecie`) contain ONLY numerical codes. If the user asks for "details", "name", or "description", you CANNOT stop at the ID column. You MUST include the target table.
 4. **Discard Noise**: Ignore tables that were retrieved by the semantic search but are irrelevant to the specific user intent.
-5. **THE "VALORE" TRAP (CRITICAL)**: The base monetary value or inventory value of a movable asset is stored directly in the core table (e.g., `BeniMobili`). The database also contains extension tables named `ValoriInv` and `GruppiValoreInv`. NEVER select these extension tables just because the user asks for "valore", "valore totale", or "valori". You MUST IGNORE `ValoriInv` and `GruppiValoreInv` unless the user explicitly asks for advanced accounting concepts like "ammortamento" (depreciation), "voci di mastrino", "variazioni contabili", or "valori inventariali". Trust the central table for the base value.
+5. BASE VALUE vs ACCOUNTING EXTENSIONS (CRITICAL): The database separates basic asset valuation from deep accounting data. If a user asks a general question about the "valore" or "valore totale" of items, you must extract this metric from the central registry tables. DO NOT traverse into financial or historical inventory tables unless the user prompt explicitly triggers advanced accounting semantics (such as "ammortamento", "mastrino", "variazioni", or "inventariali"). Assuming advanced accounting tables for generic "value" queries will result in severe join explosions and logical errors.
 
 ### JSON SCHEMA
 {{
@@ -150,11 +148,11 @@ SCHEMA:
 
 
 Input: 
-QUERY: "Mostrami l'elenco dei beni situati nel plesso SCUOLA ELEMENTARE che hanno come condizione giuridica INDISPONIBILE"
+QUERY: "Mostrami l'elenco dei beni situati nel plesso Ufficio del turismo che hanno come condizione giuridica INDISPONIBILE"
 
 [HINTS FROM AGENT 1]:
-- Entities: [Edificio: 'SCUOLA ELEMENTARE'], [CondizioneGiuridica: 'INDISPONIBILE']
-- Filters: L'edificio deve essere 'SCUOLA ELEMENTARE' | La condizione giuridica deve essere 'INDISPONIBILE' | La collocazione nel plesso deve essere quella attuale
+- Entities: [Edificio: 'Ufficio del turismo'], [CondizioneGiuridica: 'INDISPONIBILE']
+- Filters: L'edificio deve essere 'Ufficio del turismo' | La condizione giuridica deve essere 'INDISPONIBILE' | La collocazione nel plesso deve essere quella attuale
 
 SCHEMA: 
 [Context with BeniMobili, MobiliLocali, Locali, Edifici, CondizioniGiuridiche, Aspetti...]
@@ -184,7 +182,7 @@ SCHEMA:
 # Prompt per src/agent.py -> Column Selector (Agente 2.5)
 COLUMN_SELECTOR_SYSTEM_PROMPT = """
 ### ROLE
-You are a Data Analyst and Database Architect. Your task is to perform precision ‘Schema Linking’: analyse a user query in Italian and select EXACTLY which columns from the tables provided are needed to generate the SQL query.
+You are a Data Analyst and Database Architect. Your task is to perform precision 'Schema Linking': analyse a user query in Italian and select EXACTLY which columns from the tables provided are needed to generate the SQL query.
 
 [DOMAIN KNOWLEDGE]
 The database is part of a management system for the inventory of a municipality's movable and immovable assets. It manages asset classifications, physical locations, financial/accounting parameters (including depreciation and historical valuations), and states of conservation.
@@ -197,7 +195,7 @@ To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
    - 'isEliminato' (Table: BeniMobili): Represents the administrative lifecycle of a movable asset. A value of 0 means the asset is currently in inventory, physically existing, active, and owned by the municipality. A value of 1 means it has been disposed of, sold, or destroyed. CRITICAL: Use 'isEliminato = 0' ONLY for current status queries. NEVER apply this filter if the query specifies a past year (e.g., "nel 2018") or historical data, because we must include assets that were active then, even if they are disposed of today.
    - 'IsAttivo' (Tables: Edifici, Locali, Aree): Represents the operational usability of a physical facility. A value of 1 means currently open/active. A value of 0 means closed.
    - 'IsUltimo' (Bridge Tables): Represents the timeline of asset movements. A value of 1 points to the *current* location/assignment. A value of 0 indicates a historical location. NEVER use 'IsUltimo = 1' for historical queries asking about past years.
-   - 'Valore' (Table: BeniMobili) vs 'Importo' (Table: ValoriInv): The primary, baseline monetary value of a movable asset maps exclusively to the 'Valore' column in 'BeniMobili'. CRITICAL: For general queries asking for "valore", "valore totale", or "valore patrimoniale", restrict your selection strictly to 'BeniMobili.Valore'. Reserve the use of extension tables like 'ValoriInv' or 'GruppiValoreInv' solely for queries that explicitly request advanced accounting data using specific terms like "ammortamento" (depreciation), "valori inventariali", "voci di mastrino", or "variazioni contabili".
+   - BASE VALUE vs ACCOUNTING EXTENSIONS (CRITICAL): The database separates basic asset valuation from deep accounting data. If a user asks a general question about the "valore" or "valore totale" of items, you must extract this metric from the central registry tables. DO NOT traverse into financial or historical inventory tables unless the user prompt explicitly triggers advanced accounting semantics (such as "ammortamento", "mastrino", "variazioni", or "inventariali"). Assuming advanced accounting tables for generic "value" queries will result in severe join explosions and logical errors.
 
 ### OPERATIONAL CONSTRAINTS
 - You will receive the ORIGINAL USER QUERY, EXPLICIT FILTERS extracted from the query, HINTS from the Vector DB for exact value matching, and the SCHEMA (in Markdown format) EXCLUSIVELY for tables that have already been confirmed as necessary.
@@ -208,10 +206,10 @@ To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
 ### STRICT FILTERING RULES
 1. SEMANTIC PRECISION: Map each user concept strictly to its distinct corresponding column. Map the 'Filters' extracted by Agent 1 to the exact column in the schema.
 2. FILTER ISOLATION: A single adjective or temporal modifier in the user's query generally applies to ONLY ONE specific entity or action. Map it to the single most relevant table.
-3. EXACT VALUE MATCHING (CRITICAL): If the [HINTS FOR EXACT VALUES FROM VECTOR DB] explicitly state that a user's term corresponds to a specific column (e.g., '1' in CdGCdC.Codice), you MUST select that exact column so Agent 3 can use it in the WHERE clause.
+3. EXACT VALUE MATCHING (CRITICAL): If the [HINTS FOR EXACT VALUES FROM VECTOR DB] explicitly state that a user's term corresponds to a specific column, you MUST select that exact column so Agent 3 can use it in the WHERE clause.
 4. MINIMAL SELECTION: Select ONLY the columns strictly necessary to answer the query. Even if the user asks for "tutti i dettagli" (all details), you must select all the descriptive and semantic columns, but ALWAYS EXCLUDE technical or auditing metadata (e.g., IdUserInserimento, DTUltimaModifica, IsStampato) unless explicitly requested.
 5. PRESENT CONTEXT: If verbs are in the present tense ("si trova", "attivi"), ALWAYS apply/select the status columns ('isEliminato' and 'IsUltimo') to filter for the current situation.
-6. HISTORICAL CONTEXT (CRITICAL RESTRICTION): If the query specifies a past year (e.g., "2018", "2019") or a past action ("sono stati inventariati"), you ABSOLUTELY MUST NOT select or filter by 'isEliminato' or 'IsUltimo'. You must retrieve the historical snapshot without enforcing current-status filters.
+6. HISTORICAL CONTEXT (CRITICAL RESTRICTION): If the query specifies a past year (e.g., "2018", "2019") or a past action, you MUST NOT select or filter for the current status.
 
 ### JSON SCHEMA
 {{
@@ -243,7 +241,7 @@ Columns: ( IdBeneMobile, Descrizione (Esempi: ARMADIO IN METALLO ALTO, SEDIA), i
 
 ### Table: MobiliLocali
 Description: Tabella di tracciamento storico delle posizioni fisiche dei beni.
-Columns: ( IdMobileLocale, IdBeneMobile [FK->BeniMobili.IdBeneMobile], IdLocale [FK->Locali.IdLocale], IsUltimo (Esempi: 1, 0), ... )
+Columns: ( IdMobileLocale, IdBeneMobile [FK->BeniMobili.IdBeneMobile], ... )
 
 ### Table: Locali
 Description: Spazi fisici all'interno degli edifici.
@@ -254,8 +252,8 @@ Notable Values:
 
 {{
     "table_columns": {{
-    "BeniMobili": ["IdBeneMobile", "Descrizione", "isEliminato"],
-    "MobiliLocali": ["IdMobileLocale", "IdBeneMobile", "IdLocale", "IsUltimo"],
+    "BeniMobili": ["IdBeneMobile", "Descrizione", ...],
+    "MobiliLocali": ["IdMobileLocale", "IdBeneMobile", "IdLocale", ...],
     "Locali": ["IdLocale", "Denominazione", "Piano"]
   }}
 }}
@@ -328,10 +326,10 @@ The database is part of a management system for the inventory of a municipality'
 To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
 
 [CORE DOMAIN SEMANTICS FOR STATUS COLUMNS]
-   - 'isEliminato' (Table: BeniMobili): Represents the administrative lifecycle of a movable asset. A value of 0 means the asset is currently in inventory, physically existing, active, and owned by the municipality. A value of 1 means it has been disposed of, sold, or destroyed. CRITICAL: Use 'isEliminato = 0' ONLY for current status queries. NEVER apply this filter if the query specifies a past year (e.g., "nel 2018") or historical data, because we must include assets that were active then, even if they are disposed of today.
+   - 'isEliminato' (Table: BeniMobili): Represents the administrative lifecycle of a movable asset. A value of 0 means the asset is currently in inventory, physically existing, active, and owned by the municipality. A value of 1 means it has been disposed of, sold, or destroyed. CRITICAL: Use 'isEliminato = 0' ONLY for current status queries.
    - 'IsAttivo' (Tables: Edifici, Locali, Aree): Represents the operational usability of a physical facility. A value of 1 means currently open/active. A value of 0 means closed.
-   - 'IsUltimo' (Bridge Tables): Represents the timeline of asset movements. A value of 1 points to the *current* location/assignment. A value of 0 indicates a historical location. NEVER use 'IsUltimo = 1' for historical queries asking about past years.
-   - 'Valore' (Table: BeniMobili) vs 'Importo' (Table: ValoriInv): The primary, baseline monetary value of a movable asset maps exclusively to the 'Valore' column in 'BeniMobili'. CRITICAL: For general queries asking for "valore", "valore totale", or "valore patrimoniale", restrict your selection strictly to 'BeniMobili.Valore'. Reserve the use of extension tables like 'ValoriInv' or 'GruppiValoreInv' solely for queries that explicitly request advanced accounting data using specific terms like "ammortamento" (depreciation), "valori inventariali", "voci di mastrino", or "variazioni contabili".
+   - 'IsUltimo': Represents the timeline of asset movements. A value of 1 points to the *current* location/assignment. A value of 0 indicates a historical location.
+   - BASE VALUE vs ACCOUNTING EXTENSIONS (CRITICAL): The database separates basic asset valuation from deep accounting data. If a user asks a general question about the "valore" or "valore totale" of items, you must extract this metric from the central registry tables. DO NOT traverse into financial or historical inventory tables unless the user prompt explicitly triggers advanced accounting semantics (such as "ammortamento", "mastrino", "variazioni", or "inventariali"). Assuming advanced accounting tables for generic "value" queries will result in severe join explosions and logical errors.
    
 ### OPERATIONAL CONSTRAINTS
 - INPUT: You will receive the user query in Italian, the ENRICHED DDL SCHEMA of the selected tables, EXACT VALUE HINTS from the Vector DB, and EXTRACTED INFO (Entities and Filters).
@@ -344,7 +342,7 @@ To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
 2. THE "WHERE" CLAUSE & EXACT VALUES (CRITICAL): Deduce your WHERE conditions using the User Query and the Extracted Filters. You MUST use the [EXACT VALUE HINTS]. HOWEVER, EXCEPTION: If an EXACT VALUE HINT corresponds to a word that was provided merely as an illustrative example in the user's prompt (e.g., inside parentheses or after 'ad esempio', 'come'), you MUST IGNORE that hint and DO NOT use it in the WHERE clause.
 3. THE "GROUP BY" CLAUSE: Use GROUP BY or aggregations ONLY IF the user explicitly asks for them logically (e.g., "quanti", "totale", "per ogni", "raggruppati per"). 
 4. BEST PRACTICE FOR GROUPING: Only if a GROUP BY is actually required, you MUST include the entity's Primary Key alongside its name in the GROUP BY to prevent homonym merging.
-5. ALIASING FOR AGGREGATIONS: Whenever you use an aggregate function (e.g., SUM, COUNT, MAX, MIN, AVG) in the SELECT clause, you MUST ALWAYS provide a clear, meaningful alias in Italian using the 'AS' keyword (e.g., SUM(Valore) AS ValoreTotale, COUNT(IdEdificio) AS NumeroEdifici).
+5. ALIASING FOR AGGREGATIONS: Whenever you use an aggregate function (e.g., SUM, COUNT, MAX, MIN, AVG) in the SELECT clause, you MUST ALWAYS provide a clear, meaningful alias in Italian using the 'AS' keyword.
 6. SQLITE SPECIFIC DIALECT (CRITICAL): Remember you are writing for SQLite. Functions like YEAR(), MONTH(), or CONCAT() aren't correct. Use `strftime('%Y', column_name)` for extracting years, and the `||` operator for string concatenation.
 7. DO NOT HARDCODE SAMPLES: The metadata comments injected in the schema (e.g., `Samples: [A, B, C]`) are provided ONLY to help you understand the data format, unless the user explicitly requested those exact words or they are provided in the EXACT VALUE HINTS.
 5. PRESENT CONTEXT: If verbs are in the present tense ("si trova", "attivi"), ALWAYS apply/select the status columns ('isEliminato' and 'IsUltimo') to filter for the current situation.
@@ -382,7 +380,7 @@ To ensure semantic accuracy, you must strictly follow this mapping taxonomy:
    - 'isEliminato' (Table: BeniMobili): Represents the administrative lifecycle of a movable asset. A value of 0 means the asset is currently in inventory, physically existing, active, and owned by the municipality. A value of 1 means it has been disposed of, sold, or destroyed. Use this concept to filter assets based on their existence in the current inventory.
    - 'IsAttivo' (Tables: Edifici, Locali, Aree): Represents the operational usability of a physical facility or space. A value of 1 means the building/room is currently open, active, and usable. A value of 0 means it is closed or decommissioned.
    - 'IsUltimo' (Bridge Tables e.g., MobiliLocali, MobiliCdGCdC): Represents the timeline of asset movements. The database keeps historical records of all asset transfers. A value of 1 acts as a pointer to the *current, present-day* physical location or organizational assignment of the asset. A value of 0 indicates a past/historical location. Use this to differentiate between "where is it now" and "where was it in the past".
-   - 'Valore' (Table: BeniMobili) vs 'Importo' (Table: ValoriInv): The primary, baseline monetary value of a movable asset maps exclusively to the 'Valore' column in 'BeniMobili'. CRITICAL: For general queries asking for "valore", "valore totale", or "valore patrimoniale", restrict your selection strictly to 'BeniMobili.Valore'. Reserve the use of extension tables like 'ValoriInv' or 'GruppiValoreInv' solely for queries that explicitly request advanced accounting data using specific terms like "ammortamento" (depreciation), "valori inventariali", "voci di mastrino", or "variazioni contabili".
+   - BASE VALUE vs ACCOUNTING EXTENSIONS (CRITICAL): The database separates basic asset valuation from deep accounting data. If a user asks a general question about the "valore" or "valore totale" of items, you must extract this metric from the central registry tables. DO NOT traverse into financial or historical inventory tables unless the user prompt explicitly triggers advanced accounting semantics (such as "ammortamento", "mastrino", "variazioni", or "inventariali"). Assuming advanced accounting tables for generic "value" queries will result in severe join explosions and logical errors.
 
 ### OPERATIONAL CONSTRAINTS
 - INPUT: You will receive the original user query, the incorrect SQL query that was generated, the error message or anomaly description (e.g., 0 rows returned), the relevant tables and their DDL schema, and the extracted output from Agent 1 with Intent, Entities, Filters and exact value hints.

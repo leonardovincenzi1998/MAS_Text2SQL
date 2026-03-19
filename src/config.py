@@ -22,17 +22,6 @@ BM25_VALUES_PATH = os.getenv("BM25_VALUES_PATH", os.path.join(BASE_DIR, "bm25_va
 DEFAULT_LOCAL_MODEL_PATH = "/scratch.hpc/leonardo.vincenzi/mas_text2sql/local_models/bge-m3"
 LOCAL_MODEL_PATH = os.getenv("EMBEDDING_MODEL_PATH", DEFAULT_LOCAL_MODEL_PATH)
 
-# llm configuration via langchain adapter
-# llm = ChatOpenAI(
-#     model=LLM_MODEL_NAME,
-#     openai_api_base=BASE_URL,
-#     openai_api_key=API_KEY,
-#     temperature=0.1
-# )
-
-# 1. LLM for Agent 1 and 2 (Entity Extraction and Table Selection)
-# Used light penalties to avoid reasoning loops
-# and max_tokens as an extreme safety valve.
 llm_extractor = ChatOpenAI(
     model=LLM_MODEL_NAME,
     openai_api_base=BASE_URL,
@@ -43,9 +32,6 @@ llm_extractor = ChatOpenAI(
     frequency_penalty=0
 )
 
-
-# 2. LLM for Agent 2 and 2.5 (Table & Column Selection / Schema Linking)
-# ZERO PENALITÀ: devono poter ripetere i nomi esatti di tabelle e colonne senza paura.
 llm_reasoning = ChatOpenAI(
     model=LLM_MODEL_NAME,
     openai_api_base=BASE_URL,
@@ -55,7 +41,6 @@ llm_reasoning = ChatOpenAI(
     presence_penalty=0.0,
     frequency_penalty=0.0
 )
-
 
 llm_sql = ChatOpenAI(
     model=LLM_MODEL_NAME,

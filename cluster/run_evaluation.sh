@@ -12,7 +12,7 @@ echo "==========================================================================
 echo " 🚀 AVVIO VALUTAZIONE AUTOMATICA BATCH (vLLM + Evaluator)"
 echo "=============================================================================="
 
-# 1. Configurazione percorsi e variabili d'ambiente (uguali a start_session.sh)
+# Configuring paths and environment variables
 export SCRATCH_DIR="/scratch.hpc/leonardo.vincenzi"
 export HF_HOME="$SCRATCH_DIR/hf_cache"
 export PIP_CACHE_DIR="$SCRATCH_DIR/.cache/pip"
@@ -28,17 +28,16 @@ export XDG_CACHE_HOME="$SCRATCH_DIR/.cache"
 mkdir -p $XDG_CACHE_HOME
 export VLLM_USE_UVLOOP=0
 
-# Assicuriamoci di essere nella cartella corretta del progetto
 cd "$SCRATCH_DIR/mas_text2sql"
 
-# 2. Attivazione virtual environment
+# Activating the virtual environment
 echo "⚙️ Attivazione ambiente virtuale..."
 source "$SCRATCH_DIR/venv/bin/activate"
 
-# Trappola per spegnere vLLM in caso l'utente prema Ctrl+C durante lo script
+# A mechanism to terminate the vLLM if the user presses Ctrl+C during the script
 trap 'echo -e "\n🛑 Interruzione manuale! Arresto server vLLM..."; pkill -f "vllm.entrypoints.openai.api_server"; exit 1;' SIGINT
 
-# 3. Avvio server vLLM in background
+# Start the vLLM server in background
 if pgrep -f "vllm.entrypoints.openai.api_server" > /dev/null; then
     echo "⚠️ vLLM è già in esecuzione in background, lo riutilizzo."
 else
@@ -60,7 +59,7 @@ else
     echo "⏳ Attesa avvio server (Timeout 300s)..."
     timeout 300 bash -c 'until curl -s localhost:8000/v1/models > /dev/null; do sleep 5; done'
     
-    # Controllo se la porta ha risposto in tempo
+    # check if the door responded in time
     if [ $? -ne 0 ]; then
         echo "❌ Errore: Il server vLLM non si è avviato in tempo o è andato in crash (OOM?). Controlla vllm_eval_server.log"
         kill -9 $SERVER_PID
@@ -86,14 +85,12 @@ echo "✅ Server vLLM pronto e in ascolto!"
 # fi
 # echo "✅ Ingestion completata con successo!"
 
-# 4. Esecuzione dello script Python di Batch Evaluation
 echo ""
 echo "🤖 Avvio script di valutazione automatica..."
 echo "--------------------------------------------------"
 
 python3 batch_evaluator1.py --db "$DB_PATH" --golden_set set_domande.txt --output_json metriche_modello_1.json --output_txt report_nodo1.txt
 
-# 5. Spegnimento e Cleanup automatico
 echo ""
 echo "--------------------------------------------------"
 echo "🛑 Arresto server vLLM per liberare le risorse..."

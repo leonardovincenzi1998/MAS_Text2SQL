@@ -32,16 +32,15 @@ async def run_column_selector(state: AgentState) -> Dict[str, Any]:
     extracted_filters = "Nessun filtro logico esplicito."
     
     if extraction:
-        # Estrazione dell'intent
+        # intent extraction
         if hasattr(extraction, 'intent') and extraction.intent:
             extracted_intent = extraction.intent
             
-        # Estrazione dei filtri
+        # filters extraction
         if hasattr(extraction, 'filters') and extraction.filters:
             extracted_filters = "\n- ".join(extraction.filters)
 
-    # --- COSTRUZIONE DEL PROMPT HUMAN ESTREMAMENTE FOCALIZZATO ---
-    # Aggiunto il blocco [INTENT]
+    # building the human message
     human_message_content = f"""USER QUERY: "{state['user_query']}"
 
     [INTENT]

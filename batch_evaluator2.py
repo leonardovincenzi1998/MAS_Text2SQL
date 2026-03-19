@@ -10,7 +10,6 @@ import gc
 import statistics
 from sqlglot.expressions import Table, Column
 
-# Disabilita i warning di pydantic per un log più pulito
 warnings.filterwarnings("ignore", message=".*PydanticSerializationUnexpectedValue.*")
 
 from langchain_core.messages import HumanMessage
@@ -132,7 +131,6 @@ async def main():
     parser.add_argument("--runs", type=int, default=5, help="Number of times to run EACH question")
     args = parser.parse_args()
 
-    # Importa il workflow solo dopo aver settato le variabili d'ambiente
     from src.graph import app 
 
     print("="*70)
@@ -146,7 +144,6 @@ async def main():
         
     print(f"Trovate {len(eval_dataset)} domande nel file. Inizio elaborazione...\n")
     
-    # Inizializza il file TXT sovrascrivendolo
     with open(args.output_txt, "w", encoding="utf-8") as f:
         f.write("="*80 + "\n")
         f.write(" REPORT STATISTICO VALUTAZIONE TEXT-TO-SQL\n")
@@ -154,7 +151,7 @@ async def main():
         f.write("="*80 + "\n\n")
 
     results_json = []
-    all_valid_runs_flat = [] # Per le metriche globali finali
+    all_valid_runs_flat = [] 
 
     for item in eval_dataset:
         q_id = item["id"]
@@ -167,7 +164,6 @@ async def main():
         max_domanda_retries = 2
         question_runs_data = []
 
-        # LOOP DELLE 15 ITERAZIONI
         for run_idx in range(args.runs):
             print(f"   🔄 Esecuzione {run_idx + 1}/{args.runs}...")
             
@@ -197,7 +193,6 @@ async def main():
                             "retry_count": 0
                         }
                     
-                    # Timeout globale di 4 minuti per evitare blocchi infiniti
                     final_state = await asyncio.wait_for(app.ainvoke(current_state), timeout=240.0)
                     
                     errore_fatale = final_state.get("error") or final_state.get("error_traceback")
@@ -213,7 +208,6 @@ async def main():
                     retry_count = final_state.get("retry_count", 0)
                     selected_cols_dict = final_state.get("selected_columns") or {}
                     
-                    # --- CALCOLO METRICHE SOTA ---
                     ex_match = False
                     if execution_status:
                         ex_match = compare_execution_results(args.db, golden_sql, generated_sql)
@@ -236,7 +230,6 @@ async def main():
                     col_recall = tp_col / len(golden_cols_fq) if golden_cols_fq else 0.0
                     col_precision = tp_col / len(selected_cols_fq) if selected_cols_fq else 0.0
 
-                    # Salva risultati
                     run_result.update({
                         "generated_sql": generated_sql,
                         "execution_status": execution_status,
@@ -249,8 +242,7 @@ async def main():
                         "error": errore_fatale
                     })
 
-                    break # Successo, esci dal ciclo dei retries (attempt)
-
+                    break 
                 except asyncio.TimeoutError:
                     if attempt < max_domanda_retries - 1:
                         continue
@@ -262,19 +254,15 @@ async def main():
                     run_result["error"] = str(e)
                     break
                 finally:
-                    # ✅ QUESTA È LA GARANZIA ASSOLUTA DI PULIZIA RAM
-                    # Viene eseguito sempre, anche dopo break o continue
                     if current_state is not None:
                         del current_state
                     if final_state is not None:
                         del final_state
 
-            # Aggiungi la run alla lista della domanda
             question_runs_data.append(run_result)
             if run_result["error"] != "Timeout":
                 all_valid_runs_flat.append(run_result)
 
-            # Scrivi i dettagli della Run sul File TXT
             status_ico = "🏆" if run_result['ex_match'] else ("✅" if run_result['execution_status'] else "❌")
             run_log = f"  [Run {run_idx + 1}] {status_ico}\n"
             run_log += f"    Gen SQL: {run_result['generated_sql']}\n"
@@ -285,13 +273,9 @@ async def main():
             write_to_report(args.output_txt, run_log)
 
             print(run_log)
-            # Pulizia e raffreddamento per ogni Run per evitare sovraccarico GPU
             gc.collect() 
             await asyncio.sleep(2.0)
 
-        # ==========================================
-        # STATISTICHE DELLA SINGOLA DOMANDA
-        # ==========================================
         ex_matches = [1.0 if r["ex_match"] else 0.0 for r in question_runs_data if not r["error"] == "Timeout"]
         exec_status = [1.0 if r["execution_status"] else 0.0 for r in question_runs_data if not r["error"] == "Timeout"]
         tab_recalls = [r["table_recall"] for r in question_runs_data if not r["error"] == "Timeout"]
@@ -308,7 +292,6 @@ async def main():
             "col_precision": calc_stats(col_precs)
         }
 
-        # Salva in JSON
         results_json.append({
             "id": q_id,
             "question": user_query,
@@ -317,7 +300,6 @@ async def main():
             "statistics": q_stats
         })
 
-        # Scrivi statistiche domanda su TXT
         stat_log = f"\n  📊 STATISTICHE DOMANDA {q_id}:\n"
         stat_log += f"    - EX-Match:        Media {q_stats['ex_match'][0]*100:.1f}% (σ = {q_stats['ex_match'][1]*100:.1f}%)\n"
         stat_log += f"    - Syntax Accuracy: Media {q_stats['execution_status'][0]*100:.1f}% (σ = {q_stats['execution_status'][1]*100:.1f}%)\n"
@@ -329,13 +311,10 @@ async def main():
         
         print(stat_log)
 
-        # Salvataggio JSON Finale
         with open(args.output_json, "w", encoding="utf-8") as f:
             json.dump(results_json, f, indent=4, ensure_ascii=False)
         
-    # ==========================================
-    # STATISTICHE GLOBALI (TUTTE LE RUN)
-    # ==========================================
+
     if all_valid_runs_flat:
         gl_ex_matches = [1.0 if r["ex_match"] else 0.0 for r in all_valid_runs_flat]
         gl_exec_status = [1.0 if r["execution_status"] else 0.0 for r in all_valid_runs_flat]
